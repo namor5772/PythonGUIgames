@@ -24,35 +24,53 @@ To deactivate, run `deactivate`.
 > The project currently has no third-party dependencies — Tkinter ships with
 > Python. The `.venv` keeps this project isolated for when dependencies are added.
 
-## Running
+## Desktop shortcuts
 
-```powershell
-# With the venv activated:
-python hello_world.py
-
-# Or without activating, using the venv interpreter directly:
-.venv\Scripts\python.exe hello_world.py
-```
-
-## Desktop shortcut
-
-A double-clickable Desktop shortcut can launch the app with no console window
+A double-clickable Desktop shortcut can launch MyTetris with no console window
 (it uses the venv's `pythonw.exe`):
 
 ```powershell
-# Generate the icon (writes hello_world.ico), then create the shortcut:
-.venv\Scripts\python.exe make_icon.py
+# Generate the icon, then create the MyTetris shortcut (defaults):
+.venv\Scripts\python.exe make_tetris_icon.py
 .\create_shortcut.ps1
 ```
 
-This creates **"Hello World.lnk"** on your Desktop with a custom window icon.
-The shortcut points at `.venv\Scripts\pythonw.exe hello_world.py`, so it runs the
-GUI silently. Re-run `create_shortcut.ps1` if you move the project folder.
+This creates **"MyTetris.lnk"** on your Desktop with a custom Tetris icon, pointing
+at `.venv\Scripts\pythonw.exe MyTetris.py` so the GUI runs silently. Re-run the
+script if you move the project folder (the shortcut stores absolute paths).
+
+`create_shortcut.ps1` is parameterized, so the same script can make a shortcut for
+any future app: `.\create_shortcut.ps1 -Script MyApp.py -Icon myapp.ico -Name "My App"`.
+
+## MyTetris
+
+An accurate Tkinter clone of the classic game **Tetris**, implementing the modern
+"guideline" mechanics:
+
+- 10 x 20 playfield with the 7 standard tetrominoes in their classic colors
+- **SRS** rotation (Super Rotation System) with wall kicks
+- **7-bag** randomizer, **DAS** (smooth held movement), and **lock delay**
+- Ghost piece, next-piece preview, hold, soft/hard drop
+- Line-clear scoring, leveling, and increasing gravity
+
+```powershell
+python MyTetris.py
+
+# Headless logic self-test (no window):
+python MyTetris.py --selftest
+```
+
+| Key | Action | Key | Action |
+| --- | --- | --- | --- |
+| ← / → | Move | Space | Hard drop |
+| ↓ | Soft drop | C / Shift | Hold |
+| ↑ / X | Rotate CW | P | Pause |
+| Z / Ctrl | Rotate CCW | R | Restart |
 
 ## Scripts
 
 | Script | Description |
 | --- | --- |
-| `hello_world.py` | Minimal Tkinter window displaying "HELLO WORLD!" centered. |
-| `make_icon.py` | Generates `hello_world.ico` (a custom window icon) using only the standard library. |
-| `create_shortcut.ps1` | Creates a Desktop shortcut that launches the app without a console window. |
+| `MyTetris.py` | Accurate Tetris clone (SRS, 7-bag, DAS, ghost, hold, scoring). |
+| `make_tetris_icon.py` | Generates `mytetris.ico` (a Tetris-themed icon) using only the standard library. |
+| `create_shortcut.ps1` | Creates a Desktop shortcut for any app (parameterized: `-Script`, `-Icon`, `-Name`). |
