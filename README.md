@@ -53,6 +53,16 @@ An accurate Tkinter clone of the classic game **Tetris**, implementing the moder
 - Ghost piece, next-piece preview, hold, soft/hard drop
 - Line-clear scoring, leveling, and increasing gravity
 
+It also includes:
+
+- **Start menu** — pick a difficulty before each game
+- **Difficulty levels** — *Easy* (slower), *Normal*, *Hard* (starts at level 5,
+  faster fall, 1.25x score)
+- **Sound effects** — synthesized at runtime with the standard library (Windows
+  `winsound`); toggle with **M**. No audio files are shipped or required.
+- **High-score persistence** — top-10 scores per difficulty, saved to
+  `%APPDATA%\MyTetris\highscores.json` (user data, kept out of the repo)
+
 ```powershell
 python MyTetris.py
 
@@ -65,12 +75,14 @@ python MyTetris.py --selftest
 | ← / → | Move | Space | Hard drop |
 | ↓ | Soft drop | C / Shift | Hold |
 | ↑ / X | Rotate CW | P | Pause |
-| Z / Ctrl | Rotate CCW | R | Restart |
+| Z / Ctrl | Rotate CCW | M | Mute |
+| Enter | Start (menu) | Esc | Back to menu / quit |
+| R | Restart / retry | | |
 
 ## Scripts
 
 | Script | Description |
 | --- | --- |
-| `MyTetris.py` | Accurate Tetris clone (SRS, 7-bag, DAS, ghost, hold, scoring). |
+| `MyTetris.py` | Accurate Tetris clone (SRS, 7-bag, DAS, ghost, hold, scoring, start menu, difficulty, sound, high scores). |
 | `make_tetris_icon.py` | Generates `mytetris.ico` (a Tetris-themed icon) using only the standard library. |
 | `create_shortcut.ps1` | Creates a Desktop shortcut for any app (parameterized: `-Script`, `-Icon`, `-Name`). |
