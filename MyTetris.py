@@ -30,8 +30,10 @@ import json
 import math
 import os
 import random
+import re
 import struct
 import sys
+import threading
 import wave
 import tkinter as tk
 
@@ -229,8 +231,14 @@ class SoundManager:
         data = self._cache.get(name)
         if data is None:
             return
+        # winsound forbids SND_MEMORY | SND_ASYNC ("Cannot play asynchronously
+        # from memory"), so play the in-memory WAV *synchronously* on a daemon
+        # thread. That keeps audio off the game loop without writing files.
+        threading.Thread(target=self._play_sync, args=(data,), daemon=True).start()
+
+    def _play_sync(self, data):
         try:
-            self._ws.PlaySound(data, self._ws.SND_MEMORY | self._ws.SND_ASYNC)
+            self._ws.PlaySound(data, self._ws.SND_MEMORY)
         except Exception:
             pass
 
@@ -275,12 +283,37 @@ def save_scores(scores):
         pass
 
 
+def _config_path():
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "MyTetris", "config.json")
+
+
+def load_config():
+    try:
+        with open(_config_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_config(config):
+    try:
+        path = _config_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+    except Exception:
+        pass
+
+
 class TetrisGame:
     def __init__(self, root, enable_sound=True, persist=True):
         self.root = root
         self.persist = persist
         self.sound = SoundManager(enable=enable_sound)
         self.scores = load_scores()
+        self.config = load_config()
         self.difficulty = "Normal"
         self.diff = DIFFICULTIES[self.difficulty]
         self.board = [[None] * COLS for _ in range(ROWS)]
@@ -299,6 +332,7 @@ class TetrisGame:
         self.held = set()
         self.state = "menu"
         self._build_ui()
+        self._restore_window_position()
         self.loop_id = self.root.after(FRAME_MS, self.tick)
 
     # ----- piece geometry --------------------------------------------------
@@ -609,6 +643,42 @@ class TetrisGame:
         if self.persist:
             save_scores(self.scores)
 
+    # ----- window position persistence -------------------------------------
+    def _restore_window_position(self):
+        win = self.config.get("window")
+        if not isinstance(win, dict):
+            return
+        try:
+            x, y = int(win["x"]), int(win["y"])
+        except (KeyError, ValueError, TypeError):
+            return
+        self.root.update_idletasks()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        w = self.root.winfo_reqwidth() or 1
+        h = self.root.winfo_reqheight() or 1
+        # Clamp so the whole window stays on the primary screen (and grabbable).
+        x = max(0, min(x, max(0, sw - w)))
+        y = max(0, min(y, max(0, sh - h)))
+        self.root.geometry(f"+{x}+{y}")
+
+    def _save_window_position(self):
+        if not self.persist:
+            return
+        # Parse the position out of geometry() (not winfo_x/y) so restoring it
+        # verbatim doesn't make the window creep by the title-bar height.
+        try:
+            m = re.match(r"(\d+)x(\d+)([+-]\d+)([+-]\d+)", self.root.geometry())
+            if m:
+                self.config["window"] = {"x": int(m.group(3)), "y": int(m.group(4))}
+                save_config(self.config)
+        except Exception:
+            pass
+
+    def _on_close(self):
+        self._save_window_position()
+        self.root.destroy()
+
     # ----- input ------------------------------------------------------------
     def on_key_press(self, event):
         key = event.keysym
@@ -686,7 +756,7 @@ class TetrisGame:
         elif key in ("Return", "KP_Enter", "space"):
             self.start_game(self.difficulty)
         elif key == "Escape":
-            self.root.destroy()
+            self._on_close()
 
     # ----- lifecycle --------------------------------------------------------
     def start_game(self, difficulty):
@@ -770,6 +840,7 @@ class TetrisGame:
 
         self.root.bind("<KeyPress>", self.on_key_press)
         self.root.bind("<KeyRelease>", self.on_key_release)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.focus_set()
 
     def _stat_row(self, parent, name, var):

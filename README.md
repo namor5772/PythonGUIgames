@@ -64,6 +64,8 @@ It also includes:
   `winsound`); toggle with **M**. No audio files are shipped or required.
 - **High-score persistence** — top-10 scores per difficulty, saved to
   `%APPDATA%\MyTetris\highscores.json` (user data, kept out of the repo)
+- **Window-position memory** — the window reopens where you last closed it
+  (saved to `%APPDATA%\MyTetris\config.json`)
 - **Pause → "return to menu?" confirmation** so you never lose a game by accident
 
 ```powershell
