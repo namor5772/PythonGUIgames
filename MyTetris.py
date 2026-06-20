@@ -4,20 +4,23 @@ Guideline mechanics:
   * 10 x 20 playfield, 7 tetrominoes with their standard colors
   * SRS (Super Rotation System) rotation with wall kicks
   * 7-bag randomizer, DAS (Delayed Auto Shift), lock delay
-  * Soft drop, hard drop, ghost piece, hold, next-piece preview
+  * Soft drop, hard drop, ghost piece, hold, next-3 preview queue
   * Line-clear scoring, leveling, and increasing gravity
+  * T-spin detection (Full / Mini) with bonus scoring
+  * Back-to-back bonus (1.5x) for chained Tetrises / T-spins
 
 Extras:
   * Start menu with selectable difficulty (Easy / Normal / Hard)
   * Synthesized sound effects (pure standard library, Windows winsound)
   * High-score persistence per difficulty (JSON in %APPDATA%\\MyTetris)
+  * Pause -> "return to menu?" confirmation
 
 Controls:
   Left / Right .... move          Up or X ......... rotate clockwise
   Down ............ soft drop      Z or Ctrl ....... rotate counter-clockwise
   Space ........... hard drop      C or Shift ...... hold piece
   P ............... pause          M ............... mute
-  Esc ............. back to menu   R ............... restart / retry
+  Esc ............. menu (asks)    R ............... restart / retry
 
 Run:  python MyTetris.py           Self-test (headless logic):  python MyTetris.py --selftest
 """
@@ -37,13 +40,15 @@ import tkinter as tk
 # ----------------------------------------------------------------------------
 COLS, ROWS = 10, 20
 CELL = 30
-PCELL = 26
-FRAME_MS = 16                # ~60 FPS fixed timestep
+PCELL = 26          # hold/legacy preview cell
+PNEXT = 18          # next-queue / hold preview cell
+FRAME_MS = 16       # ~60 FPS fixed timestep
 
 DAS_DELAY = 150
 DAS_REPEAT = 40
 SOFT_DROP_INTERVAL = 30
 MAX_LOCK_RESETS = 15
+TOAST_FRAMES = 80   # how long a "TETRIS" / "T-SPIN" banner lingers
 
 BG = "#0b0b12"
 BG_CELL = "#15151f"
@@ -51,13 +56,13 @@ GRID_LINE = "#22222e"
 PANEL_CELL = "#15151f"
 TEXT = "#e6e6ec"
 SUBTEXT = "#9a9ab0"
+GOLD = "#ffd91a"
 
 COLORS = {
     "I": "#19d3da", "J": "#3f63e0", "L": "#ff9f1a", "O": "#ffd91a",
     "S": "#2ecc55", "T": "#a64ddb", "Z": "#ef4444",
 }
 
-# Difficulty presets. gravity_mult < 1 means faster fall.
 DIFFICULTIES = {
     "Easy":   {"start_level": 1, "gravity_mult": 1.6, "lock_delay": 700,
                "score_mult": 1.0, "blurb": "Slower fall, gentle start"},
@@ -68,7 +73,6 @@ DIFFICULTIES = {
 }
 DIFFICULTY_NAMES = list(DIFFICULTIES)
 
-# Spawn-state matrices (SRS); other states are 90-degree rotations.
 BASE = {
     "I": [[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]],
     "J": [[1, 0, 0], [1, 1, 1], [0, 0, 0]],
@@ -119,7 +123,18 @@ KICKS_I = {
     (0, 3): [(0, 0), (-1, 0), (2, 0), (-1, -2), (2, 1)],
 }
 
-SCORE_TABLE = {1: 100, 2: 300, 3: 500, 4: 800}
+# Front-corner pairs of the T's 3x3 box, by rotation (corner keys A,B,C,D =
+# top-left, top-right, bottom-left, bottom-right). "Front" = pointing side.
+T_FRONT_CORNERS = {0: ("A", "B"), 1: ("B", "D"), 2: ("C", "D"), 3: ("A", "C")}
+
+
+def _clear_base(cleared, tspin):
+    """Base points (before level/difficulty/B2B multipliers) for a lock."""
+    if tspin == "full":
+        return {0: 400, 1: 800, 2: 1200, 3: 1600}.get(cleared, 0)
+    if tspin == "mini":
+        return {0: 100, 1: 200, 2: 400}.get(cleared, 0)
+    return {1: 100, 2: 300, 3: 500, 4: 800}.get(cleared, 0)
 
 
 def _adjust(hex_color, factor):
@@ -132,13 +147,12 @@ def _adjust(hex_color, factor):
 
 
 # ----------------------------------------------------------------------------
-# Sound: synthesize small WAV buffers and play them via winsound (no files).
+# Sound: synthesize small WAV buffers and play via winsound (no files).
 # ----------------------------------------------------------------------------
 SAMPLE_RATE = 22050
 
 
 def _tone(freq, ms, vol=0.4, wave_type="square"):
-    """Generate a single tone as a list of 16-bit PCM samples."""
     n = int(SAMPLE_RATE * ms / 1000)
     attack = max(1, int(0.004 * SAMPLE_RATE))
     samples = []
@@ -148,7 +162,7 @@ def _tone(freq, ms, vol=0.4, wave_type="square"):
             base = 1.0 if math.sin(2 * math.pi * freq * t) >= 0 else -1.0
         else:
             base = math.sin(2 * math.pi * freq * t)
-        env = min(1.0, i / attack) * (1.0 - i / n)   # fade in, linear decay out
+        env = min(1.0, i / attack) * (1.0 - i / n)
         samples.append(int(max(-1.0, min(1.0, base * env * vol)) * 32767))
     return samples
 
@@ -161,7 +175,6 @@ def _seq(*tone_lists):
 
 
 def _wav(samples):
-    """Wrap PCM samples into an in-memory mono 16-bit WAV byte string."""
     buf = io.BytesIO()
     w = wave.open(buf, "wb")
     w.setnchannels(1)
@@ -173,8 +186,6 @@ def _wav(samples):
 
 
 class SoundManager:
-    """Plays synthesized effects asynchronously; silent if winsound is absent."""
-
     def __init__(self, enable=True):
         self.muted = False
         self.enabled = False
@@ -202,6 +213,8 @@ class SoundManager:
                                    _tone(784, 70))),
             "tetris": _wav(_seq(_tone(523, 60, 0.5), _tone(659, 60, 0.5),
                                 _tone(784, 60, 0.5), _tone(1047, 120, 0.5))),
+            "tspin": _wav(_seq(_tone(880, 45, 0.45), _tone(1175, 45, 0.45),
+                               _tone(1568, 110, 0.45))),
             "levelup": _wav(_seq(_tone(659, 50), _tone(880, 50),
                                  _tone(1175, 100))),
             "gameover": _wav(_seq(_tone(440, 130, 0.4, "sine"),
@@ -263,8 +276,6 @@ def save_scores(scores):
 
 
 class TetrisGame:
-    """Game state, update logic, input, rendering, menu, sound, and scores."""
-
     def __init__(self, root, enable_sound=True, persist=True):
         self.root = root
         self.persist = persist
@@ -272,7 +283,6 @@ class TetrisGame:
         self.scores = load_scores()
         self.difficulty = "Normal"
         self.diff = DIFFICULTIES[self.difficulty]
-        # Minimal state so the HUD/menu can render before a game starts.
         self.board = [[None] * COLS for _ in range(ROWS)]
         self.queue = []
         self.hold_piece = None
@@ -280,6 +290,12 @@ class TetrisGame:
         self.score = self.lines = 0
         self.level = 1
         self.new_best = False
+        self.b2b = False
+        self.confirm_menu = False
+        self.last_action_was_rotate = False
+        self.last_kick_index = 0
+        self._toast_text = ""
+        self._toast_frames = 0
         self.held = set()
         self.state = "menu"
         self._build_ui()
@@ -321,6 +337,8 @@ class TetrisGame:
         self.fall_charge = 0
         self.lock_counter = 0
         self.lock_resets = 0
+        self.last_action_was_rotate = False
+        self.last_kick_index = 0
         if not self.valid_at(self.piece, self.rot, self.px, self.py):
             self.state = "gameover"
 
@@ -329,12 +347,37 @@ class TetrisGame:
         self._fill_queue()
         self.set_current(piece)
 
-    # ----- locking & line clears -------------------------------------------
+    # ----- locking, T-spin, line clears, scoring ---------------------------
     def _lock(self, sound_name):
         self.sound.play(sound_name)
         self.lock_piece()
 
+    def _corner_filled(self, x, y):
+        """A corner counts as filled if it's a wall/floor/ceiling or a block."""
+        if x < 0 or x >= COLS or y < 0 or y >= ROWS:
+            return True
+        return self.board[y][x] is not None
+
+    def _detect_tspin(self):
+        """Return 'full', 'mini', or None for the piece about to lock."""
+        if self.piece != "T" or not self.last_action_was_rotate:
+            return None
+        corners = {
+            "A": self._corner_filled(self.px + 0, self.py + 0),
+            "B": self._corner_filled(self.px + 2, self.py + 0),
+            "C": self._corner_filled(self.px + 0, self.py + 2),
+            "D": self._corner_filled(self.px + 2, self.py + 2),
+        }
+        if sum(corners.values()) < 3:
+            return None
+        f1, f2 = T_FRONT_CORNERS[self.rot]
+        full = corners[f1] and corners[f2]
+        if self.last_kick_index >= 4:   # the big "TST"-style kick is always full
+            full = True
+        return "full" if full else "mini"
+
     def lock_piece(self):
+        tspin = self._detect_tspin()
         topout = False
         for cx, cy in self.current_cells():
             x, y = self.px + cx, self.py + cy
@@ -343,32 +386,76 @@ class TetrisGame:
                 continue
             if 0 <= x < COLS and 0 <= y < ROWS:
                 self.board[y][x] = COLORS[self.piece]
-        self.clear_lines()
+        cleared = self._remove_full_rows()
+        self._apply_score(cleared, tspin)
         self.can_hold = True
         if topout:
             self.state = "gameover"
             return
         self.spawn_from_queue()
 
-    def clear_lines(self):
+    def _remove_full_rows(self):
         kept = [row for row in self.board if any(c is None for c in row)]
         cleared = ROWS - len(kept)
-        if not cleared:
-            return
         for _ in range(cleared):
             kept.insert(0, [None] * COLS)
         self.board = kept
-        self.lines += cleared
-        old_level = self.level
-        self.level = self.diff["start_level"] + self.lines // 10
-        self.score += int(SCORE_TABLE.get(cleared, 0) * self.level
-                          * self.diff["score_mult"])
-        if self.level > old_level:
+        return cleared
+
+    def _apply_score(self, cleared, tspin):
+        base = _clear_base(cleared, tspin)
+        b2b_bonus = 1.0
+        b2b_applied = False
+        if cleared > 0:
+            difficult = (cleared == 4) or (tspin is not None)
+            if difficult:
+                if self.b2b:
+                    b2b_bonus = 1.5
+                    b2b_applied = True
+                self.b2b = True
+            else:
+                self.b2b = False
+        self.score += int(base * self.level * self.diff["score_mult"] * b2b_bonus)
+
+        leveled = False
+        if cleared:
+            self.lines += cleared
+            old_level = self.level
+            self.level = self.diff["start_level"] + self.lines // 10
+            leveled = self.level > old_level
+
+        label = self._clear_label(cleared, tspin, b2b_applied)
+        if label:
+            self._toast_text = label
+            self._toast_frames = TOAST_FRAMES
+
+        if leveled:
             self.sound.play("levelup")
+        elif tspin and cleared > 0:
+            self.sound.play("tetris")
+        elif tspin:
+            self.sound.play("tspin")
         elif cleared >= 4:
             self.sound.play("tetris")
-        else:
+        elif cleared > 0:
             self.sound.play("lineclear")
+        else:
+            self.sound.play("lock")
+
+    @staticmethod
+    def _clear_label(cleared, tspin, b2b):
+        names = {1: "SINGLE", 2: "DOUBLE", 3: "TRIPLE", 4: "TETRIS"}
+        if tspin == "full":
+            text = "T-SPIN" + (" " + names[cleared] if cleared else "")
+        elif tspin == "mini":
+            text = "T-SPIN MINI" + (" " + names[cleared] if cleared else "")
+        elif cleared == 4:
+            text = "TETRIS"
+        else:
+            text = ""
+        if text and b2b:
+            text = "B2B " + text
+        return text
 
     # ----- movement / rotation ---------------------------------------------
     def try_move(self, dx, dy):
@@ -376,6 +463,7 @@ class TetrisGame:
             return False
         self.px += dx
         self.py += dy
+        self.last_action_was_rotate = False
         if dy > 0:
             self.lock_counter = 0
             self.lock_resets = 0
@@ -388,11 +476,13 @@ class TetrisGame:
             return False
         new_rot = (self.rot + direction) % 4
         table = KICKS_I if self.piece == "I" else KICKS_JLSTZ
-        for dx, dy in table[(self.rot, new_rot)]:
+        for i, (dx, dy) in enumerate(table[(self.rot, new_rot)]):
             if self.valid_at(self.piece, new_rot, self.px + dx, self.py + dy):
                 self.rot = new_rot
                 self.px += dx
                 self.py += dy
+                self.last_action_was_rotate = True
+                self.last_kick_index = i
                 if self.grounded():
                     self._reset_lock_on_action()
                 self.sound.play("rotate")
@@ -495,6 +585,8 @@ class TetrisGame:
     def tick(self):
         if self.state == "playing":
             self.update(FRAME_MS)
+            if self._toast_frames > 0:
+                self._toast_frames -= 1
         if self.state == "gameover" and not self._gameover_handled:
             self._gameover_handled = True
             self.sound.play("gameover")
@@ -541,6 +633,15 @@ class TetrisGame:
             elif key in ("r", "R"):
                 self.start_game(self.difficulty)
             return
+        # playing / paused (with optional confirm-menu modal)
+        if self.confirm_menu:
+            if key in ("y", "Y", "Return", "KP_Enter"):
+                self.confirm_menu = False
+                self.state = "menu"
+            elif key in ("n", "N", "Escape"):
+                self.confirm_menu = False
+                self.state = "paused"
+            return
         if key in ("p", "P"):
             if self.state == "playing":
                 self.state = "paused"
@@ -548,7 +649,8 @@ class TetrisGame:
                 self.state = "playing"
             return
         if key == "Escape":
-            self.state = "menu"
+            self.confirm_menu = True       # ask before abandoning the game
+            self.state = "paused"
             return
         if key in ("r", "R"):
             self.start_game(self.difficulty)
@@ -607,7 +709,13 @@ class TetrisGame:
         self.fall_charge = 0
         self.lock_counter = 0
         self.lock_resets = 0
+        self.last_action_was_rotate = False
+        self.last_kick_index = 0
+        self.b2b = False
+        self.confirm_menu = False
         self.new_best = False
+        self._toast_text = ""
+        self._toast_frames = 0
         self._gameover_handled = False
         self.state = "playing"
         self.spawn_from_queue()
@@ -639,22 +747,22 @@ class TetrisGame:
         tk.Label(side, text="NEXT", bg=BG, fg=SUBTEXT,
                  font=("Consolas", 12, "bold")).pack(anchor="w")
         self.next_canvas = tk.Canvas(
-            side, width=4 * PCELL, height=4 * PCELL,
+            side, width=4 * PNEXT, height=9 * PNEXT,
             bg=PANEL_CELL, highlightthickness=1, highlightbackground="#33334a")
-        self.next_canvas.pack(pady=(2, 10))
+        self.next_canvas.pack(pady=(2, 8))
 
         tk.Label(side, text="HOLD", bg=BG, fg=SUBTEXT,
                  font=("Consolas", 12, "bold")).pack(anchor="w")
         self.hold_canvas = tk.Canvas(
-            side, width=4 * PCELL, height=4 * PCELL,
+            side, width=4 * PNEXT, height=3 * PNEXT,
             bg=PANEL_CELL, highlightthickness=1, highlightbackground="#33334a")
-        self.hold_canvas.pack(pady=(2, 10))
+        self.hold_canvas.pack(pady=(2, 8))
 
-        self._stat(side, "SCORE", self.score_var)
-        self._stat(side, "BEST", self.best_var)
-        self._stat(side, "LEVEL", self.level_var)
-        self._stat(side, "LINES", self.lines_var)
-        self._stat(side, "DIFFICULTY", self.diff_var)
+        self._stat_row(side, "SCORE", self.score_var)
+        self._stat_row(side, "BEST", self.best_var)
+        self._stat_row(side, "LEVEL", self.level_var)
+        self._stat_row(side, "LINES", self.lines_var)
+        self._stat_row(side, "DIFF", self.diff_var)
 
         tk.Label(side, text="M Mute   Esc Menu", bg=BG, fg=SUBTEXT,
                  justify="left", font=("Consolas", 9)).pack(anchor="w",
@@ -664,11 +772,13 @@ class TetrisGame:
         self.root.bind("<KeyRelease>", self.on_key_release)
         self.root.focus_set()
 
-    def _stat(self, parent, name, var):
-        tk.Label(parent, text=name, bg=BG, fg=SUBTEXT,
-                 font=("Consolas", 10, "bold")).pack(anchor="w")
-        tk.Label(parent, textvariable=var, bg=BG, fg=TEXT,
-                 font=("Consolas", 16, "bold")).pack(anchor="w", pady=(0, 6))
+    def _stat_row(self, parent, name, var):
+        row = tk.Frame(parent, bg=BG)
+        row.pack(anchor="w", fill="x", pady=1)
+        tk.Label(row, text=name, bg=BG, fg=SUBTEXT, width=6, anchor="w",
+                 font=("Consolas", 10, "bold")).pack(side="left")
+        tk.Label(row, textvariable=var, bg=BG, fg=TEXT, anchor="w",
+                 font=("Consolas", 14, "bold")).pack(side="left")
 
     # ----- rendering --------------------------------------------------------
     def draw_block(self, canvas, px, py, size, color):
@@ -713,14 +823,22 @@ class TetrisGame:
                 if self.py + cy >= 0:
                     self.draw_block(c, (self.px + cx) * CELL,
                                     (self.py + cy) * CELL, CELL, color)
+            if self._toast_frames > 0:
+                c.create_text(COLS * CELL / 2, 3 * CELL, text=self._toast_text,
+                              fill=GOLD, font=("Consolas", 16, "bold"))
         if self.state == "paused":
-            self._draw_overlay([("PAUSED", 26, "#ffffff"),
-                                ("P  Resume", 13, "#cfcfe0"),
-                                ("Esc  Menu    R  Retry", 11, SUBTEXT)])
+            if self.confirm_menu:
+                self._draw_overlay([("RETURN TO MENU?", 22, "#ffffff"),
+                                    ("This game will be lost", 12, SUBTEXT),
+                                    ("Y  Yes        N  No", 13, "#cfcfe0")])
+            else:
+                self._draw_overlay([("PAUSED", 26, "#ffffff"),
+                                    ("P  Resume", 13, "#cfcfe0"),
+                                    ("Esc  Menu    R  Retry", 11, SUBTEXT)])
         elif self.state == "gameover":
             lines = [("GAME OVER", 26, "#ffffff")]
             if self.new_best:
-                lines.append(("★ NEW HIGH SCORE ★", 14, COLORS["O"]))
+                lines.append(("★ NEW HIGH SCORE ★", 14, GOLD))
             lines.append((f"Score  {self.score}", 14, TEXT))
             lines.append((f"Best  {self._best(self.difficulty)}", 12, SUBTEXT))
             lines.append(("ENTER  Menu    R  Retry", 12, "#cfcfe0"))
@@ -749,22 +867,22 @@ class TetrisGame:
         c = self.canvas
         w, h = COLS * CELL, ROWS * CELL
         c.create_rectangle(0, 0, w, h, fill=BG_CELL, outline="")
-        c.create_text(w / 2, 70, text="MYTETRIS", fill="#ffffff",
+        c.create_text(w / 2, 66, text="MYTETRIS", fill="#ffffff",
                       font=("Consolas", 34, "bold"))
-        c.create_text(w / 2, 104, text="a classic clone", fill=SUBTEXT,
+        c.create_text(w / 2, 100, text="a classic clone", fill=SUBTEXT,
                       font=("Consolas", 11))
-        c.create_text(w / 2, 175, text="DIFFICULTY", fill=SUBTEXT,
+        c.create_text(w / 2, 162, text="DIFFICULTY", fill=SUBTEXT,
                       font=("Consolas", 12, "bold"))
-        c.create_text(w / 2, 208, text=f"◄  {self.difficulty.upper()}  ►",
+        c.create_text(w / 2, 194, text=f"◄  {self.difficulty.upper()}  ►",
                       fill=COLORS["T"], font=("Consolas", 20, "bold"))
-        c.create_text(w / 2, 238, text=self.diff["blurb"], fill=SUBTEXT,
+        c.create_text(w / 2, 222, text=self.diff["blurb"], fill=SUBTEXT,
                       font=("Consolas", 9))
-        c.create_text(w / 2, 292, text=f"BEST  {self._best(self.difficulty)}",
-                      fill=COLORS["O"], font=("Consolas", 16, "bold"))
-        c.create_text(w / 2, 330, text="TOP SCORES", fill=SUBTEXT,
+        c.create_text(w / 2, 272, text=f"BEST  {self._best(self.difficulty)}",
+                      fill=GOLD, font=("Consolas", 16, "bold"))
+        c.create_text(w / 2, 308, text="TOP SCORES", fill=SUBTEXT,
                       font=("Consolas", 11, "bold"))
         entries = self.scores.get(self.difficulty, [])[:5]
-        y = 356
+        y = 332
         if entries:
             for i, e in enumerate(entries):
                 c.create_text(w / 2, y,
@@ -775,11 +893,11 @@ class TetrisGame:
         else:
             c.create_text(w / 2, y, text="— none yet —", fill=SUBTEXT,
                           font=("Consolas", 10))
-        c.create_text(w / 2, h - 96, text="ENTER  Start", fill="#ffffff",
+        c.create_text(w / 2, h - 104, text="ENTER  Start", fill="#ffffff",
                       font=("Consolas", 14, "bold"))
-        c.create_text(w / 2, h - 66, text="↑ ↓  Change difficulty",
+        c.create_text(w / 2, h - 76, text="↑ ↓  Change difficulty",
                       fill=SUBTEXT, font=("Consolas", 10))
-        c.create_text(w / 2, h - 44, text="M  Mute       Esc  Quit",
+        c.create_text(w / 2, h - 54, text="M  Mute       Esc  Quit",
                       fill=SUBTEXT, font=("Consolas", 10))
         if self.sound.muted or not self.sound.enabled:
             label = "MUTED" if self.sound.enabled else "NO SOUND"
@@ -792,23 +910,24 @@ class TetrisGame:
         self.lines_var.set(str(self.lines))
         self.diff_var.set(self.difficulty)
         self.best_var.set(str(self._best(self.difficulty)))
-        self._draw_preview(self.next_canvas, self.queue[0] if self.queue else None)
-        self._draw_preview(self.hold_canvas, self.hold_piece)
+        self.next_canvas.delete("all")
+        for i in range(min(3, len(self.queue))):
+            self._blit_piece(self.next_canvas, self.queue[i], 0,
+                             i * 3 * PNEXT, PNEXT)
+        self.hold_canvas.delete("all")
+        if self.hold_piece:
+            self._blit_piece(self.hold_canvas, self.hold_piece, 0, 0, PNEXT)
 
-    def _draw_preview(self, canvas, piece):
-        canvas.delete("all")
-        if not piece:
-            return
+    def _blit_piece(self, canvas, piece, base_x, base_y, cell):
+        """Draw `piece` centered in a 4-wide x 3-tall cell box at (base_x, base_y)."""
         cells = self.cells_of(piece, 0)
         cols = [c for c, _ in cells]
         rows = [r for _, r in cells]
-        wb = max(cols) - min(cols) + 1
-        hb = max(rows) - min(rows) + 1
-        off_x = (4 - wb) / 2 - min(cols)
-        off_y = (4 - hb) / 2 - min(rows)
+        off_x = (4 - (max(cols) - min(cols) + 1)) / 2 - min(cols)
+        off_y = (3 - (max(rows) - min(rows) + 1)) / 2 - min(rows)
         for cx, cy in cells:
-            self.draw_block(canvas, (cx + off_x) * PCELL,
-                            (cy + off_y) * PCELL, PCELL, COLORS[piece])
+            self.draw_block(canvas, base_x + (cx + off_x) * cell,
+                            base_y + (cy + off_y) * cell, cell, COLORS[piece])
 
 
 def _selftest():
@@ -816,7 +935,7 @@ def _selftest():
     root = tk.Tk()
     root.withdraw()
     game = TetrisGame(root, enable_sound=False, persist=False)
-    game.render()  # menu renders without a live piece
+    game.render()
     for difficulty in DIFFICULTY_NAMES:
         game.start_game(difficulty)
         for i in range(1500):
@@ -834,7 +953,7 @@ def _selftest():
             if i % 19 == 0:
                 game.hard_drop()
             if game.state == "gameover":
-                game.tick()           # exercise the game-over handler
+                game.tick()
                 game.start_game(difficulty)
             game.render()
     root.destroy()

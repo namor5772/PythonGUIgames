@@ -50,8 +50,10 @@ An accurate Tkinter clone of the classic game **Tetris**, implementing the moder
 - 10 x 20 playfield with the 7 standard tetrominoes in their classic colors
 - **SRS** rotation (Super Rotation System) with wall kicks
 - **7-bag** randomizer, **DAS** (smooth held movement), and **lock delay**
-- Ghost piece, next-piece preview, hold, soft/hard drop
+- Ghost piece, **next-3 preview queue**, hold, soft/hard drop
 - Line-clear scoring, leveling, and increasing gravity
+- **T-spin** detection (Full / Mini) with bonus scoring and on-screen banners
+- **Back-to-back** bonus (1.5x) for chained Tetrises / T-spins
 
 It also includes:
 
@@ -62,6 +64,7 @@ It also includes:
   `winsound`); toggle with **M**. No audio files are shipped or required.
 - **High-score persistence** — top-10 scores per difficulty, saved to
   `%APPDATA%\MyTetris\highscores.json` (user data, kept out of the repo)
+- **Pause → "return to menu?" confirmation** so you never lose a game by accident
 
 ```powershell
 python MyTetris.py
@@ -76,13 +79,13 @@ python MyTetris.py --selftest
 | ↓ | Soft drop | C / Shift | Hold |
 | ↑ / X | Rotate CW | P | Pause |
 | Z / Ctrl | Rotate CCW | M | Mute |
-| Enter | Start (menu) | Esc | Back to menu / quit |
+| Enter | Start (menu) | Esc | Menu (asks first) / quit |
 | R | Restart / retry | | |
 
 ## Scripts
 
 | Script | Description |
 | --- | --- |
-| `MyTetris.py` | Accurate Tetris clone (SRS, 7-bag, DAS, ghost, hold, scoring, start menu, difficulty, sound, high scores). |
+| `MyTetris.py` | Accurate Tetris clone (SRS, 7-bag, DAS, ghost, hold, next-3, T-spins, back-to-back, start menu, difficulty, sound, high scores). |
 | `make_tetris_icon.py` | Generates `mytetris.ico` (a Tetris-themed icon) using only the standard library. |
 | `create_shortcut.ps1` | Creates a Desktop shortcut for any app (parameterized: `-Script`, `-Icon`, `-Name`). |
