@@ -1,0 +1,8 @@
+{
+    // Point VS Code's Python extension at this project's virtual environment.
+    // Used by Ctrl+F5 (Run Without Debugging), F5 (Debug), and new terminals.
+    "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+
+    // Auto-activate the venv in any integrated terminal opened in this workspace.
+    "python.terminal.activateEnvironment": true
+}
