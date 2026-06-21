@@ -11,7 +11,7 @@ Guideline mechanics:
 
 Extras:
   * Start menu with selectable difficulty (Easy / Normal / Hard)
-  * Synthesized sound effects (pure standard library, Windows winsound)
+  * Synthesized sound effects (stdlib; Windows winsound / macOS afplay)
   * High-score persistence per difficulty (JSON in %APPDATA%\\MyTetris)
   * Pause -> "return to menu?" confirmation
 
@@ -25,14 +25,18 @@ Controls:
 Run:  python MyTetris.py           Self-test (headless logic):  python MyTetris.py --selftest
 """
 
+import atexit
 import io
 import json
 import math
 import os
 import random
 import re
+import shutil
 import struct
+import subprocess
 import sys
+import tempfile
 import threading
 import wave
 import tkinter as tk
@@ -149,7 +153,11 @@ def _adjust(hex_color, factor):
 
 
 # ----------------------------------------------------------------------------
-# Sound: synthesize small WAV buffers and play via winsound (no files).
+# Sound: synthesize small WAV buffers and play them per-platform. On Windows we
+# play the buffers straight from memory with winsound (no files). macOS has no
+# stdlib audio API, so we write each buffer to a temp WAV once and play it with
+# the system `afplay` tool. Either way playback runs on a daemon thread so it
+# never blocks the game loop.
 # ----------------------------------------------------------------------------
 SAMPLE_RATE = 22050
 
@@ -187,66 +195,101 @@ def _wav(samples):
     return buf.getvalue()
 
 
+def _sound_specs():
+    """name -> WAV bytes for every effect (shared by both playback backends)."""
+    return {
+        "blip": _wav(_tone(440, 30, 0.25)),
+        "start": _wav(_seq(_tone(523, 60, 0.4), _tone(784, 110, 0.4))),
+        "rotate": _wav(_tone(600, 38, 0.3)),
+        "hold": _wav(_tone(380, 45, 0.3)),
+        "lock": _wav(_tone(200, 55, 0.35, "sine")),
+        "harddrop": _wav(_tone(110, 70, 0.5, "sine")),
+        "lineclear": _wav(_seq(_tone(523, 55), _tone(659, 55),
+                               _tone(784, 70))),
+        "tetris": _wav(_seq(_tone(523, 60, 0.5), _tone(659, 60, 0.5),
+                            _tone(784, 60, 0.5), _tone(1047, 120, 0.5))),
+        "tspin": _wav(_seq(_tone(880, 45, 0.45), _tone(1175, 45, 0.45),
+                           _tone(1568, 110, 0.45))),
+        "levelup": _wav(_seq(_tone(659, 50), _tone(880, 50),
+                             _tone(1175, 100))),
+        "gameover": _wav(_seq(_tone(440, 130, 0.4, "sine"),
+                              _tone(330, 130, 0.4, "sine"),
+                              _tone(247, 130, 0.4, "sine"),
+                              _tone(165, 220, 0.4, "sine"))),
+    }
+
+
 class SoundManager:
     def __init__(self, enable=True):
         self.muted = False
         self.enabled = False
-        self._ws = None
-        self._cache = {}
+        self._ws = None         # winsound module (Windows backend)
+        self._afplay = None     # path to afplay (macOS backend)
+        self._cache = {}        # name -> WAV bytes (Windows: played from memory)
+        self._files = {}        # name -> temp WAV path (macOS: played by afplay)
         if not enable:
             return
-        try:
-            import winsound
-            self._ws = winsound
-        except Exception:
-            return
+        if sys.platform == "win32":
+            try:
+                import winsound
+                self._ws = winsound
+            except Exception:
+                return
+        elif sys.platform == "darwin" and os.path.exists("/usr/bin/afplay"):
+            self._afplay = "/usr/bin/afplay"
+        else:
+            return                                  # no supported backend
         self.enabled = True
         self._build()
 
     def _build(self):
-        self._cache = {
-            "blip": _wav(_tone(440, 30, 0.25)),
-            "start": _wav(_seq(_tone(523, 60, 0.4), _tone(784, 110, 0.4))),
-            "rotate": _wav(_tone(600, 38, 0.3)),
-            "hold": _wav(_tone(380, 45, 0.3)),
-            "lock": _wav(_tone(200, 55, 0.35, "sine")),
-            "harddrop": _wav(_tone(110, 70, 0.5, "sine")),
-            "lineclear": _wav(_seq(_tone(523, 55), _tone(659, 55),
-                                   _tone(784, 70))),
-            "tetris": _wav(_seq(_tone(523, 60, 0.5), _tone(659, 60, 0.5),
-                                _tone(784, 60, 0.5), _tone(1047, 120, 0.5))),
-            "tspin": _wav(_seq(_tone(880, 45, 0.45), _tone(1175, 45, 0.45),
-                               _tone(1568, 110, 0.45))),
-            "levelup": _wav(_seq(_tone(659, 50), _tone(880, 50),
-                                 _tone(1175, 100))),
-            "gameover": _wav(_seq(_tone(440, 130, 0.4, "sine"),
-                                  _tone(330, 130, 0.4, "sine"),
-                                  _tone(247, 130, 0.4, "sine"),
-                                  _tone(165, 220, 0.4, "sine"))),
-        }
+        self._cache = _sound_specs()
+        if self._afplay:
+            # macOS: afplay needs files, so materialize each WAV once into a
+            # private temp dir and replay those paths. Cleaned up at exit.
+            tmpdir = tempfile.mkdtemp(prefix="mytetris-snd-")
+            for name, data in self._cache.items():
+                path = os.path.join(tmpdir, name + ".wav")
+                with open(path, "wb") as f:
+                    f.write(data)
+                self._files[name] = path
+            atexit.register(shutil.rmtree, tmpdir, ignore_errors=True)
 
     def play(self, name):
         if not self.enabled or self.muted:
             return
-        data = self._cache.get(name)
-        if data is None:
-            return
-        # winsound forbids SND_MEMORY | SND_ASYNC ("Cannot play asynchronously
-        # from memory"), so play the in-memory WAV *synchronously* on a daemon
-        # thread. That keeps audio off the game loop without writing files.
-        threading.Thread(target=self._play_sync, args=(data,), daemon=True).start()
+        if self._ws is not None:
+            data = self._cache.get(name)
+            if data is not None:
+                # winsound forbids SND_MEMORY | SND_ASYNC ("Cannot play
+                # asynchronously from memory"), so play the in-memory WAV
+                # *synchronously* on a daemon thread to keep audio off the loop.
+                threading.Thread(target=self._play_winsound, args=(data,),
+                                 daemon=True).start()
+        elif self._afplay is not None:
+            path = self._files.get(name)
+            if path is not None:
+                threading.Thread(target=self._play_afplay, args=(path,),
+                                 daemon=True).start()
 
-    def _play_sync(self, data):
+    def _play_winsound(self, data):
         try:
             self._ws.PlaySound(data, self._ws.SND_MEMORY)
         except Exception:
             pass
 
+    def _play_afplay(self, path):
+        try:
+            subprocess.run([self._afplay, path],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
     def toggle_mute(self):
         self.muted = not self.muted
-        if self.muted and self.enabled:
+        if self.muted and self._ws is not None:
             try:
-                self._ws.PlaySound(None, self._ws.SND_PURGE)
+                self._ws.PlaySound(None, self._ws.SND_PURGE)  # cut Windows audio
             except Exception:
                 pass
 

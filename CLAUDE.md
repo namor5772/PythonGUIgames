@@ -58,6 +58,13 @@ testable headlessly. Preserve it.
   asynchronously from memory" — the combo is forbidden. We play in-memory WAVs
   *synchronously on a daemon thread* instead. Don't reintroduce `SND_ASYNC` with
   `SND_MEMORY`.
+- **Sound is per-platform.** `SoundManager` synthesizes the same WAV bytes
+  (`_sound_specs()`) on every OS, then picks a backend by `sys.platform`: Windows
+  uses `winsound` from memory; macOS has no stdlib audio API, so it writes each
+  WAV once to a temp dir and plays it with the system `/usr/bin/afplay` (cleaned
+  up via `atexit`). `afplay` is an OS tool, not a package, so it stays within the
+  stdlib-only spirit (same as `sips`/`iconutil` for the icon). Other platforms
+  fall back to silent (`enabled=False`). Keep the WAV synthesis backend-agnostic.
 - **Window-position creep:** save/restore the position from `root.geometry()`
   (the wm position), not `winfo_x/y` (the content position) — mixing them makes
   the window drift down-right by the title-bar height every launch.
@@ -85,4 +92,6 @@ testable headlessly. Preserve it.
 | --- | --- |
 | `MyTetris.py` | The game (and its `--selftest`). |
 | `make_tetris_icon.py` | Generates `mytetris.ico` by writing the ICO/BMP bytes directly (no Pillow). |
-| `create_shortcut.ps1` | Creates a Desktop shortcut; parameterized `-Script` / `-Icon` / `-Name`, defaults to MyTetris. |
+| `make_tetris_icon_mac.py` | Generates `mytetris.png` (the macOS "Troll Piece" icon) by writing the PNG bytes directly (zlib + chunks, no Pillow). |
+| `create_shortcut.ps1` | **Windows** Desktop `.lnk`; parameterized `-Script` / `-Icon` / `-Name`, defaults to MyTetris. |
+| `create_shortcut.command` | **macOS**: `sips`+`iconutil` build `mytetris.icns`, then assemble a clickable `.app` on the Desktop. Bakes in the found `python3` (Finder gives apps a minimal PATH) and absolute project paths. |
