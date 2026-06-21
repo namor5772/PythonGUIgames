@@ -94,7 +94,8 @@ testable headlessly. Preserve it.
 | Script | Purpose |
 | --- | --- |
 | `MyTetris.py` | The game (and its `--selftest`). |
-| `make_tetris_icon.py` | Generates `mytetris.ico` by writing the ICO/BMP bytes directly (no Pillow). |
+| `make_tetris_icon.py` | Generates `mytetris.ico` (tidy falling-T scene) by writing the ICO/BMP bytes directly (no Pillow). |
+| `make_troll_icon.py` | Generates `mytetris_troll.ico` — the funny "Troll Piece" as a multi-resolution Windows ICO (256px PNG + 48/32/16 BMP). Reuses `make_tetris_icon_mac.build_scene()` and downsamples; no Pillow. |
 | `make_tetris_icon_mac.py` | Generates `mytetris.png` (the macOS "Troll Piece" icon) by writing the PNG bytes directly (zlib + chunks, no Pillow). |
 | `create_shortcut.ps1` | **Windows** Desktop `.lnk`; parameterized `-Script` / `-Icon` / `-Name`, defaults to MyTetris. |
 | `create_shortcut.command` | **macOS**: `sips`+`iconutil` build `mytetris.icns`, then assemble a clickable `.app` on the Desktop. Bakes in the found `python3` (Finder gives apps a minimal PATH) and absolute project paths. |

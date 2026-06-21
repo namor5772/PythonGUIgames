@@ -146,6 +146,19 @@ This writes **`mytetris.ico`** (a tidy falling-T playfield scene drawn directly 
 ICO bytes — no Pillow) and creates **`MyTetris.lnk`** on your Desktop, pointing at
 `.venv\Scripts\pythonw.exe MyTetris.py` so the GUI runs with no console window.
 
+**Prefer the funny icon?** Generate **"The Troll Piece"** as a multi-resolution
+`.ico` and point the shortcut at that instead:
+
+```powershell
+.venv\Scripts\python.exe make_troll_icon.py
+.\create_shortcut.ps1 -Icon mytetris_troll.ico
+```
+
+This writes **`mytetris_troll.ico`** — 16/32/48 px BMP frames plus a 256 px PNG
+frame, so it stays sharp from the taskbar to Explorer's extra-large view. It's
+the same gag described under **macOS** below (and reuses that scene), brought to
+Windows.
+
 `create_shortcut.ps1` is parameterized, so it can make a shortcut for any app:
 
 ```powershell
@@ -186,6 +199,7 @@ anywhere in the stack). Every Tetris player feels this.
 | --- | --- |
 | `MyTetris.py` | The game — accurate Tetris clone (SRS, 7-bag, DAS, ghost, hold, next-3, T-spins, back-to-back, start menu, difficulty, sound, high scores) plus a headless `--selftest`. |
 | `make_tetris_icon.py` | **Windows icon** — generates `mytetris.ico` by writing the ICO/BMP bytes directly (no Pillow). |
+| `make_troll_icon.py` | **Windows funny icon** — generates `mytetris_troll.ico` (*The Troll Piece*) as a multi-resolution ICO (256 px PNG + 48/32/16 px BMP), reusing the macOS scene. No Pillow. |
 | `make_tetris_icon_mac.py` | **macOS icon** — generates `mytetris.png` (*The Troll Piece*) by writing the PNG bytes directly (zlib + chunks, no Pillow). |
 | `create_shortcut.ps1` | **Windows** — creates a Desktop `.lnk` for any app (parameterized: `-Script`, `-Icon`, `-Name`). |
 | `create_shortcut.command` | **macOS** — builds `mytetris.icns` and a clickable `.app` on the Desktop (optional args: name, target script). |
