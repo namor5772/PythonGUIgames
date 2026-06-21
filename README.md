@@ -66,6 +66,9 @@ window.
 | Enter | Start (from menu) | Esc | Back to menu (asks first) / quit |
 | R | Restart / retry | | |
 
+On the **start menu**: ↑ ↓ (or ← →) change the difficulty, **`[`** / **`]`**
+lower / raise the speed ramp, and **Enter** starts.
+
 ## MyTetris
 
 An accurate Tkinter clone of **Tetris** implementing the modern *guideline*
@@ -91,9 +94,16 @@ mechanics:
 - **Start menu** — choose a difficulty before each game; ← / → change the
   selection, **Enter** starts.
 - **Difficulty levels:**
-  - *Easy* — slower gravity, gentler ramp.
-  - *Normal* — standard guideline speed.
-  - *Hard* — starts at **level 5**, faster fall, and a **×1.25** score multiplier.
+  - *Easy* — slower base fall, gentle start.
+  - *Normal* — standard base fall speed.
+  - *Hard* — starts at **level 5**, faster base fall, and a **×1.25** score
+    multiplier.
+- **Adjustable speed ramp** — how quickly gravity speeds up as you level is a
+  separate setting you control right on the **start menu**: press **`[`** and
+  **`]`** to lower or raise the **SPEED RAMP** value (range `0.20`–`1.00`). `1.0`
+  is the classic Tetris ramp; **lower means a gentler per-level speed-up and much
+  longer games** (default `0.50`). It applies to every difficulty and is **saved
+  to `config.json`**, so your choice is restored automatically next time.
 - **Sound effects** — every effect (move blip, rotate, hold, lock, hard drop,
   line clear, Tetris, T-spin, level-up, game over, start jingle) is **synthesized
   at runtime** as a small WAV — no audio files are shipped or committed. Playback
@@ -115,10 +125,10 @@ User data lives outside the repo and is **never committed**:
 | File | Windows | macOS / Linux |
 | --- | --- | --- |
 | High scores | `%APPDATA%\MyTetris\highscores.json` | `~/MyTetris/highscores.json` |
-| Window position | `%APPDATA%\MyTetris\config.json` | `~/MyTetris/config.json` |
+| Window position **&** speed ramp | `%APPDATA%\MyTetris\config.json` | `~/MyTetris/config.json` |
 
 Both files load defensively — if they're missing or corrupt the game just starts
-fresh. Delete them to reset your scores or recenter the window.
+fresh. Delete them to reset your scores, or the speed ramp and window position.
 
 ## Desktop shortcuts
 

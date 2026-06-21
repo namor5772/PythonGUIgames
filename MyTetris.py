@@ -11,6 +11,7 @@ Guideline mechanics:
 
 Extras:
   * Start menu with selectable difficulty (Easy / Normal / Hard)
+  * Adjustable, persisted "speed ramp" — how fast gravity climbs per level
   * Synthesized sound effects (stdlib; Windows winsound / macOS afplay)
   * High-score persistence per difficulty (JSON in %APPDATA%\\MyTetris)
   * Pause -> "return to menu?" confirmation
@@ -69,15 +70,32 @@ COLORS = {
     "S": "#2ecc55", "T": "#a64ddb", "Z": "#ef4444",
 }
 
+# Difficulty presets. Per-difficulty knobs:
+#   start_level  - the level the game begins at
+#   gravity_mult - flat multiplier on fall time (>1 = slower, <1 = faster)
+#   lock_delay   - ms a grounded piece waits before it locks
+#   score_mult   - score multiplier for the mode
+#   blurb        - one-line description shown in the start menu
+# How fast gravity ramps up per level is a separate, player-adjustable setting
+# (see SPEED_STEP_* below and the "SPEED RAMP" row on the start menu).
 DIFFICULTIES = {
     "Easy":   {"start_level": 1, "gravity_mult": 1.6, "lock_delay": 700,
                "score_mult": 1.0, "blurb": "Slower fall, gentle start"},
     "Normal": {"start_level": 1, "gravity_mult": 1.0, "lock_delay": 500,
-               "score_mult": 1.0, "blurb": "Standard Tetris speed"},
+               "score_mult": 1.0, "blurb": "Standard fall speed"},
     "Hard":   {"start_level": 5, "gravity_mult": 0.55, "lock_delay": 350,
-               "score_mult": 1.25, "blurb": "Starts at level 5, fast"},
+               "score_mult": 1.25, "blurb": "Starts at level 5, x1.25"},
 }
 DIFFICULTY_NAMES = list(DIFFICULTIES)
+
+# Player-adjustable gravity ramp — the start-menu "SPEED RAMP" row, persisted in
+# config.json and shared by every difficulty. It scales how far each level moves
+# along the classic guideline curve: 1.0 = standard Tetris ramp, and smaller
+# values mean a gentler per-level speed-up and much longer games.
+SPEED_STEP_MIN = 0.20
+SPEED_STEP_MAX = 1.00
+SPEED_STEP_DEFAULT = 0.50
+SPEED_STEP_INCREMENT = 0.05
 
 BASE = {
     "I": [[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]],
@@ -357,6 +375,7 @@ class TetrisGame:
         self.sound = SoundManager(enable=enable_sound)
         self.scores = load_scores()
         self.config = load_config()
+        self.speed_step = self._load_speed_step()
         self.difficulty = "Normal"
         self.diff = DIFFICULTIES[self.difficulty]
         self.board = [[None] * COLS for _ in range(ROWS)]
@@ -594,11 +613,16 @@ class TetrisGame:
 
     # ----- per-frame update -------------------------------------------------
     def gravity_interval(self):
-        level = self.level
-        base = 0.8 - (level - 1) * 0.007
+        # Classic guideline gravity: time-per-cell = base^(L-1) seconds, with
+        # base = 0.8 - (L-1)*0.007. self.speed_step (the player's "SPEED RAMP"
+        # setting) stretches the ramp by scaling how far each real level advances
+        # along that curve, so a smaller value means a gentler speed-up and
+        # longer games (1.0 = standard Tetris).
+        eff = 1 + (self.level - 1) * self.speed_step   # effective level on curve
+        base = 0.8 - (eff - 1) * 0.007
         if base <= 0:
             base = 0.01
-        ms = (base ** (level - 1)) * 1000 * self.diff["gravity_mult"]
+        ms = (base ** (eff - 1)) * 1000 * self.diff["gravity_mult"]
         return max(ms, FRAME_MS)
 
     def update(self, dt):
@@ -718,6 +742,20 @@ class TetrisGame:
         except Exception:
             pass
 
+    # ----- speed-ramp setting persistence ----------------------------------
+    def _load_speed_step(self):
+        try:
+            v = round(float(self.config.get("speed_step")), 2)
+        except (TypeError, ValueError):
+            return SPEED_STEP_DEFAULT
+        return min(SPEED_STEP_MAX, max(SPEED_STEP_MIN, v))
+
+    def _save_speed_step(self):
+        if not self.persist:
+            return
+        self.config["speed_step"] = self.speed_step
+        save_config(self.config)
+
     def _on_close(self):
         self._save_window_position()
         self.root.destroy()
@@ -796,10 +834,23 @@ class TetrisGame:
         elif key in ("Down", "Right"):
             self.difficulty = DIFFICULTY_NAMES[(idx + 1) % len(DIFFICULTY_NAMES)]
             self.sound.play("blip")
+        elif key in ("bracketleft", "minus", "KP_Subtract"):
+            self._adjust_speed_step(-SPEED_STEP_INCREMENT)   # gentler / longer
+        elif key in ("bracketright", "equal", "plus", "KP_Add"):
+            self._adjust_speed_step(+SPEED_STEP_INCREMENT)   # steeper / classic
         elif key in ("Return", "KP_Enter", "space"):
             self.start_game(self.difficulty)
         elif key == "Escape":
             self._on_close()
+
+    def _adjust_speed_step(self, delta):
+        new = round(min(SPEED_STEP_MAX,
+                        max(SPEED_STEP_MIN, self.speed_step + delta)), 2)
+        if new == self.speed_step:
+            return                          # already at a limit — nothing to do
+        self.speed_step = new
+        self.sound.play("blip")
+        self._save_speed_step()             # persist the choice immediately
 
     # ----- lifecycle --------------------------------------------------------
     def start_game(self, difficulty):
@@ -991,6 +1042,9 @@ class TetrisGame:
                       fill=COLORS["T"], font=("Consolas", 20, "bold"))
         c.create_text(w / 2, 222, text=self.diff["blurb"], fill=SUBTEXT,
                       font=("Consolas", 9))
+        c.create_text(w / 2, 248,
+                      text=f"SPEED RAMP   [ {self.speed_step:.2f} ]",
+                      fill=COLORS["I"], font=("Consolas", 13, "bold"))
         c.create_text(w / 2, 272, text=f"BEST  {self._best(self.difficulty)}",
                       fill=GOLD, font=("Consolas", 16, "bold"))
         c.create_text(w / 2, 308, text="TOP SCORES", fill=SUBTEXT,
@@ -1009,7 +1063,7 @@ class TetrisGame:
                           font=("Consolas", 10))
         c.create_text(w / 2, h - 104, text="ENTER  Start", fill="#ffffff",
                       font=("Consolas", 14, "bold"))
-        c.create_text(w / 2, h - 76, text="↑ ↓  Change difficulty",
+        c.create_text(w / 2, h - 76, text="↑↓ Difficulty      [ ] Speed",
                       fill=SUBTEXT, font=("Consolas", 10))
         c.create_text(w / 2, h - 54, text="M  Mute       Esc  Quit",
                       fill=SUBTEXT, font=("Consolas", 10))

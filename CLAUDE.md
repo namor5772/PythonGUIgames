@@ -47,10 +47,13 @@ testable headlessly. Preserve it.
 - **Rotation = SRS:** pieces are matrices rotated 90°, then `KICKS_*` wall-kick
   tables are tried in order. T-spin detection needs `last_action_was_rotate` and
   `last_kick_index`, which is why every move/rotate maintains them.
-- **Persistence** lives in `%APPDATA%\MyTetris\`: `highscores.json` (top-10 per
-  difficulty) and `config.json` (window position). Both load defensively
-  (missing/corrupt → empty) and are gated by the `persist` flag so tests with
-  `persist=False` never write real files. User data — never committed.
+- **Persistence** lives in `%APPDATA%\MyTetris\` (macOS/Linux: `~/MyTetris/`):
+  `highscores.json` (top-10 per difficulty) and `config.json` (window position
+  **and** the player's `speed_step` speed-ramp setting — one shared dict, so
+  each saver merges into `self.config` rather than overwriting the file). Both
+  load defensively (missing/corrupt → empty) and are gated by the `persist` flag
+  so tests with `persist=False` never write real files. User data — never
+  committed.
 
 ## Gotchas discovered here (don't re-learn these the hard way)
 
