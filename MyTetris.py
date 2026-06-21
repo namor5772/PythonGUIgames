@@ -766,17 +766,17 @@ class TetrisGame:
         if key in self.held:
             return
         self.held.add(key)
-        self._handle_press(key)
+        self._handle_press(key, event.char)
 
     def on_key_release(self, event):
         self.held.discard(event.keysym)
 
-    def _handle_press(self, key):
+    def _handle_press(self, key, char=""):
         if key in ("m", "M"):
             self.sound.toggle_mute()
             return
         if self.state == "menu":
-            self._menu_key(key)
+            self._menu_key(key, char)
             return
         if self.state == "gameover":
             if key in ("Return", "KP_Enter"):
@@ -826,17 +826,19 @@ class TetrisGame:
         elif key in ("c", "C", "Shift_L", "Shift_R"):
             self.hold()
 
-    def _menu_key(self, key):
+    def _menu_key(self, key, char=""):
         idx = DIFFICULTY_NAMES.index(self.difficulty)
+        # Speed keys match the typed character too, not just the keysym: on macOS
+        # Tk doesn't always report "bracketleft"/"bracketright" for [ and ].
         if key in ("Up", "Left"):
             self.difficulty = DIFFICULTY_NAMES[(idx - 1) % len(DIFFICULTY_NAMES)]
             self.sound.play("blip")
         elif key in ("Down", "Right"):
             self.difficulty = DIFFICULTY_NAMES[(idx + 1) % len(DIFFICULTY_NAMES)]
             self.sound.play("blip")
-        elif key in ("bracketleft", "minus", "KP_Subtract"):
+        elif key in ("bracketleft", "minus", "KP_Subtract") or char in ("[", "-"):
             self._adjust_speed_step(-SPEED_STEP_INCREMENT)   # gentler / longer
-        elif key in ("bracketright", "equal", "plus", "KP_Add"):
+        elif key in ("bracketright", "equal", "plus", "KP_Add") or char in ("]", "=", "+"):
             self._adjust_speed_step(+SPEED_STEP_INCREMENT)   # steeper / classic
         elif key in ("Return", "KP_Enter", "space"):
             self.start_game(self.difficulty)
