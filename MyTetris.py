@@ -259,6 +259,10 @@ class SoundManager:
             return                                  # no supported backend
         self.enabled = True
         self._build()
+        if self._afplay:
+            # afplay exits 0 even into an OS-muted output, which once looked
+            # exactly like broken sound — surface the mute instead of hiding it.
+            threading.Thread(target=self._warn_if_os_muted, daemon=True).start()
 
     def _build(self):
         self._cache = _sound_specs()
@@ -302,6 +306,20 @@ class SoundManager:
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
+
+    def _warn_if_os_muted(self):
+        """Warn on stderr when macOS output is muted, so silence isn't a mystery."""
+        try:
+            r = subprocess.run(
+                ["/usr/bin/osascript", "-e",
+                 "output muted of (get volume settings)"],
+                capture_output=True, text=True, timeout=5)
+            if r.stdout.strip() == "true":
+                print("MyTetris: sound is on, but the macOS output device is "
+                      "muted — unmute to hear anything (F10, or: osascript "
+                      "-e 'set volume without output muted')", file=sys.stderr)
+        except Exception:
+            pass                        # best-effort diagnostic; never fatal
 
     def toggle_mute(self):
         self.muted = not self.muted

@@ -19,6 +19,11 @@ OS, and each degrades gracefully:
 
 On any other platform the game still runs; sound just stays off.
 
+> **No sound on macOS?** Check the system mute first: `afplay` reports success
+> even when the output device is muted, so the game can't tell the difference.
+> Both games print a startup warning to stderr when they detect this; unmute
+> with F10 or `osascript -e 'set volume without output muted'`.
+
 ## Requirements
 
 - **Python 3.14+** with **Tkinter** (both bundled with a standard CPython

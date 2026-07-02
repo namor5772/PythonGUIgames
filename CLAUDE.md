@@ -101,6 +101,12 @@ testable headlessly. Preserve it.
   up via `atexit`). `afplay` is an OS tool, not a package, so it stays within the
   stdlib-only spirit (same as `sips`/`iconutil` for the icon). Other platforms
   fall back to silent (`enabled=False`). Keep the WAV synthesis backend-agnostic.
+- **"No sound" on macOS may be the OS mute, not the code.** `afplay` exits 0
+  even when the default output device is muted (`osascript -e 'get volume
+  settings'` → `output muted:true`), so playback "works" inaudibly — exactly
+  what a broken backend would look like. Both `SoundManager`s now check this at
+  startup (daemon thread, `/usr/bin/osascript`) and warn on stderr. Rule out
+  the mute before touching the sound code.
 - **Window-position creep:** save/restore the position from `root.geometry()`
   (the wm position), not `winfo_x/y` (the content position) — mixing them makes
   the window drift down-right by the title-bar height every launch.
