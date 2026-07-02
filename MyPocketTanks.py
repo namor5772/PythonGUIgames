@@ -1314,11 +1314,22 @@ class PocketTanks:
                       font=(FONT, 9, "bold"), tags="dyn")
 
     # ----------------------------------------------------------------- panel
+    def _round_rect(self, x0, y0, x1, y1, radius=10, **kw):
+        """Rounded rectangle: Tk has no native one, so use the classic trick —
+        a smoothed polygon whose doubled corner points pin the straight edges
+        while smooth=True bends quadratic curves around each corner."""
+        r = min(radius, (x1 - x0) / 2, (y1 - y0) / 2)
+        pts = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r,
+               x1, y1 - r, x1, y1, x1 - r, y1, x0 + r, y1,
+               x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
+        return self.canvas.create_polygon(pts, smooth=True, **kw)
+
     def _button(self, x0, y0, x1, y1, label, action, enabled=True,
                 fill=BTN_BG, fg=TEXT, size=11):
         c = self.canvas
-        c.create_rectangle(x0, y0, x1, y1, fill=fill if enabled else "#15151d",
-                           outline=BTN_EDGE, width=1, tags="dyn")
+        self._round_rect(x0, y0, x1, y1, 10,
+                         fill=fill if enabled else "#15151d",
+                         outline=BTN_EDGE, width=1, tags="dyn")
         c.create_text((x0 + x1) / 2, (y0 + y1) / 2, text=label,
                       fill=fg if enabled else "#55556a",
                       font=(FONT, size, "bold"), tags="dyn")
@@ -1494,8 +1505,8 @@ class PocketTanks:
             col, row = i % cols, i // cols
             x0 = gx + col * (cw + gap)
             y0 = gy + row * (ch + gap)
-            c.create_rectangle(x0, y0, x0 + cw, y0 + ch, fill="#191926",
-                               outline=BTN_EDGE, width=1, tags="dyn")
+            self._round_rect(x0, y0, x0 + cw, y0 + ch, 12, fill="#191926",
+                             outline=BTN_EDGE, width=1, tags="dyn")
             c.create_rectangle(x0 + 10, y0 + 12, x0 + 26, y0 + 40,
                                fill=w["color"], width=0, tags="dyn")
             c.create_text(x0 + 34, y0 + 20, anchor="w", text=w["name"],
