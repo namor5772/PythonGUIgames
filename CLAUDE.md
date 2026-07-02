@@ -4,8 +4,10 @@ Guidance for working in this repository. See `README.md` for user-facing docs.
 
 ## Project
 
-`PythonGUIgames` — a collection of Python **Tkinter** GUI games. The main app is
-`MyTetris.py`, an accurate, guideline-faithful Tetris clone.
+`PythonGUIgames` — a collection of Python **Tkinter** GUI games. The main apps
+are `MyTetris.py`, an accurate, guideline-faithful Tetris clone, and
+`MyPocketTanks.py`, a turn-based artillery duel (Pocket Tanks / Scorched Earth
+style) on destructible terrain.
 
 **Pure standard library only.** No third-party packages — Tkinter, `winsound`,
 `wave`, `json`, etc. all ship with CPython. Keep it dependency-free; don't add a
@@ -24,6 +26,8 @@ Guidance for working in this repository. See `README.md` for user-facing docs.
 ```powershell
 .venv\Scripts\python.exe MyTetris.py              # play
 .venv\Scripts\python.exe MyTetris.py --selftest   # headless logic check, no window
+.venv\Scripts\python.exe MyPocketTanks.py             # same pattern
+.venv\Scripts\python.exe MyPocketTanks.py --selftest
 ```
 
 `--selftest` drives all difficulties for thousands of frames and asserts no
@@ -32,6 +36,29 @@ persistence), write a short throwaway `_*.py` script that **constructs** the exa
 state and asserts on it, run it, then delete it. Validate GUI/visuals by launching
 with `pythonw.exe` and capturing a screenshot via .NET `CopyFromScreen`, then
 `Read` the PNG. Always delete temp scripts/PNGs afterward (none should be committed).
+
+## MyPocketTanks architecture
+
+Same logic/rendering split as MyTetris: `PocketTanks(root=None)` runs fully
+headless — `step()` is pure logic driven by `--selftest`; `tick()` = `step()` +
+`draw()` when a canvas exists.
+
+- **State machine:** `state in {menu, pick, playing, gameover}` plus a
+  `confirm_menu` modal flag; within `playing`, `phase in {aim, flight}`.
+- **Terrain is a per-column heightmap** (`terrain[x]` = surface y). Explosions
+  carve circles, dirt weapons raise columns; no overhangs by design — that's
+  what keeps physics/repaints simple. Rendered into one `tk.PhotoImage`;
+  `_repaint_terrain(x0, x1)` repaints only the touched column range (full
+  repaints are slow — avoid per-frame).
+- **Weapons are data** (`WEAPONS` list) + a `kind` the projectile engine
+  dispatches on in `_impact`/`_detonate`. New weapon = new dict + a branch.
+- **Scoring is Pocket-Tanks style:** no health; damage dealt = points, self
+  damage scores for the opponent. Damage-over-time (napalm) must be budgeted
+  (see `_spawn_flames`) or scores explode.
+- **AI** picks angle/power by simulating real trajectories
+  (`_simulate_shot`), then blurs the answer by difficulty `aim_err`.
+- **Persistence:** `%APPDATA%\MyPocketTanks\config.json` (window pos, mode,
+  AI level), gated by the `persist` flag like MyTetris.
 
 ## MyTetris architecture
 
@@ -94,7 +121,9 @@ testable headlessly. Preserve it.
 | Script | Purpose |
 | --- | --- |
 | `MyTetris.py` | The game (and its `--selftest`). |
+| `MyPocketTanks.py` | The artillery duel (and its `--selftest`). |
 | `make_tetris_icon.py` | Generates `mytetris.ico` (tidy falling-T scene) by writing the ICO/BMP bytes directly (no Pillow). |
+| `make_pockettanks_icon.py` | Generates `mypockettanks.ico` (tank + shell arc + explosion scene). Reuses `make_tetris_icon.build_ico()`; no Pillow. |
 | `make_troll_icon.py` | Generates `mytetris_troll.ico` — the funny "Troll Piece" as a multi-resolution Windows ICO (256px PNG + 48/32/16 BMP). Reuses `make_tetris_icon_mac.build_scene()` and downsamples; no Pillow. |
 | `make_tetris_icon_mac.py` | Generates `mytetris.png` (the macOS "Troll Piece" icon) by writing the PNG bytes directly (zlib + chunks, no Pillow). |
 | `create_shortcut.ps1` | **Windows** Desktop `.lnk`; parameterized `-Script` / `-Icon` / `-Name`, defaults to MyTetris. |

@@ -1,7 +1,10 @@
 # PythonGUIgames
 
-A collection of Python GUI games built with **Tkinter**. The flagship is
-**MyTetris**, an accurate, guideline-faithful clone of the classic game.
+A collection of Python GUI games built with **Tkinter**:
+
+- **MyTetris** — an accurate, guideline-faithful clone of the classic game.
+- **MyPocketTanks** — a turn-based artillery duel on destructible terrain,
+  in the spirit of Pocket Tanks / Scorched Earth.
 
 Everything here is **pure standard library** — Tkinter, `wave`, `json`,
 `winsound`/`afplay`, etc. all ship with CPython, so there's nothing to `pip
@@ -11,7 +14,7 @@ OS, and each degrades gracefully:
 | Concern | Windows | macOS |
 | --- | --- | --- |
 | Sound playback | `winsound` (in-memory WAVs) | `afplay` (temp WAVs) |
-| Saved data | `%APPDATA%\MyTetris\` | `~/MyTetris/` |
+| Saved data | `%APPDATA%\<game>\` | `~/<game>/` |
 | Desktop shortcut | `create_shortcut.ps1` → `.lnk` | `create_shortcut.command` → `.app` |
 
 On any other platform the game still runs; sound just stays off.
@@ -34,8 +37,10 @@ python3 -c "import tkinter; print('tkinter', tkinter.TkVersion)"
 **macOS / Linux:**
 
 ```bash
-python3 MyTetris.py                 # play
+python3 MyTetris.py                 # play Tetris
+python3 MyPocketTanks.py            # play the artillery duel
 python3 MyTetris.py --selftest      # headless logic self-test (no window)
+python3 MyPocketTanks.py --selftest
 ```
 
 **Windows (PowerShell):**
@@ -43,8 +48,10 @@ python3 MyTetris.py --selftest      # headless logic self-test (no window)
 ```powershell
 py -m venv .venv                    # one-time: create the (git-ignored) venv
 .venv\Scripts\Activate.ps1          # activate it
-.venv\Scripts\python.exe MyTetris.py            # play
-.venv\Scripts\python.exe MyTetris.py --selftest # headless self-test
+.venv\Scripts\python.exe MyTetris.py                 # play Tetris
+.venv\Scripts\python.exe MyPocketTanks.py            # play the artillery duel
+.venv\Scripts\python.exe MyTetris.py --selftest      # headless self-tests
+.venv\Scripts\python.exe MyPocketTanks.py --selftest
 ```
 
 The `.venv` keeps the project isolated for if dependencies are ever added; since
@@ -55,7 +62,7 @@ venv, run `deactivate`.
 asserts that nothing throws — handy for catching regressions without opening a
 window.
 
-## Controls
+## Controls (MyTetris)
 
 | Key | Action | Key | Action |
 | --- | --- | --- | --- |
@@ -130,6 +137,51 @@ User data lives outside the repo and is **never committed**:
 Both files load defensively — if they're missing or corrupt the game just starts
 fresh. Delete them to reset your scores, or the speed ramp and window position.
 
+## MyPocketTanks
+
+A turn-based **artillery duel** in the spirit of Pocket Tanks / Scorched Earth,
+written from scratch for Tkinter. Two tanks trade shots across procedurally
+generated, **fully destructible terrain**. There are no health bars — every
+point of damage you deal is a point on the scoreboard, and whoever has the
+most points after all volleys **wins**. (Damaging yourself scores for your
+opponent!)
+
+- **Weapon draft** — before combat, players alternate picking **10 weapons
+  each** from a randomized pool of 20 cards, so every match plays differently.
+- **20 distinct weapons** — simple shells and big blasts; multi-shot spreads
+  (Triple Shot, Buckshot, Cluster Pod, Pentabomb — a 5-way MIRV); terrain
+  tools (Dirt Ball, Excavator, Dirt Slinger, Drill Bit, Tremor); and exotics
+  like the downhill-seeking **Steamroller**, ground-skipping **Skimmer**,
+  bouncing and hopping bombs, downhill-flowing **Firestorm** napalm, the
+  enemy-seeking **Magno Shot**, the orbital **Sky Laser**, and the colossal
+  **Kiloton**.
+- **Wind** changes every turn and bends every shot; an arrow above the field
+  shows direction and strength.
+- **Tank movement** — drive with A/D, limited by a match-long **fuel budget**
+  and slopes too steep to climb.
+- **1-player vs. an aiming AI** (Easy / Normal / Hard — it genuinely simulates
+  trajectories, with difficulty controlling its aim error) or **2-player
+  hotseat**.
+- **Destructible terrain** — craters, trenches, dirt piles, and collapsing
+  ground, painted per-pixel; tanks settle when the ground under them is blown
+  away.
+- **Synthesized sound** and a **control panel** where everything (angle, power,
+  movement, weapon select, FIRE) is clickable with the mouse too.
+
+### Controls (MyPocketTanks)
+
+| Key | Action | Key | Action |
+| --- | --- | --- | --- |
+| ← / → | Turret angle (Shift = ×5) | ↑ / ↓ | Power (Shift = ×5) |
+| A / D | Drive tank (uses fuel) | Tab / `[` `]` | Cycle weapon |
+| Space / Enter | **FIRE** | M | Mute / unmute |
+| Esc | Back to menu (asks first) | R | Rematch (after game over) |
+
+Config (window position, last mode, AI level) persists in
+`%APPDATA%\MyPocketTanks\config.json` (macOS/Linux: `~/MyPocketTanks/`), and
+`--selftest` fires every weapon headlessly plus plays full AI-vs-AI matches at
+every difficulty.
+
 ## Desktop shortcuts
 
 Create a double-clickable launcher so you don't need a terminal.
@@ -158,6 +210,17 @@ This writes **`mytetris_troll.ico`** — 16/32/48 px BMP frames plus a 256 px PN
 frame, so it stays sharp from the taskbar to Explorer's extra-large view. It's
 the same gag described under **macOS** below (and reuses that scene), brought to
 Windows.
+
+**MyPocketTanks shortcut:**
+
+```powershell
+.venv\Scripts\python.exe make_pockettanks_icon.py
+.\create_shortcut.ps1 -Script MyPocketTanks.py -Icon mypockettanks.ico -Name "MyPocketTanks"
+```
+
+This writes **`mypockettanks.ico`** (a tiny artillery duel — a red tank lobbing
+a shell into an explosion under a starry sky, drawn directly as ICO bytes) and
+creates **`MyPocketTanks.lnk`** on your Desktop.
 
 `create_shortcut.ps1` is parameterized, so it can make a shortcut for any app:
 
@@ -198,7 +261,9 @@ anywhere in the stack). Every Tetris player feels this.
 | Script | Description |
 | --- | --- |
 | `MyTetris.py` | The game — accurate Tetris clone (SRS, 7-bag, DAS, ghost, hold, next-3, T-spins, back-to-back, start menu, difficulty, sound, high scores) plus a headless `--selftest`. |
+| `MyPocketTanks.py` | Artillery duel — weapon draft, 20 weapons, destructible terrain, wind, fuel-limited movement, AI or hotseat, sound — plus a headless `--selftest`. |
 | `make_tetris_icon.py` | **Windows icon** — generates `mytetris.ico` by writing the ICO/BMP bytes directly (no Pillow). |
+| `make_pockettanks_icon.py` | **Windows icon** — generates `mypockettanks.ico` (tank, shell arc, explosion, starry sky); reuses `make_tetris_icon.build_ico()`. No Pillow. |
 | `make_troll_icon.py` | **Windows funny icon** — generates `mytetris_troll.ico` (*The Troll Piece*) as a multi-resolution ICO (256 px PNG + 48/32/16 px BMP), reusing the macOS scene. No Pillow. |
 | `make_tetris_icon_mac.py` | **macOS icon** — generates `mytetris.png` (*The Troll Piece*) by writing the PNG bytes directly (zlib + chunks, no Pillow). |
 | `create_shortcut.ps1` | **Windows** — creates a Desktop `.lnk` for any app (parameterized: `-Script`, `-Icon`, `-Name`). |
