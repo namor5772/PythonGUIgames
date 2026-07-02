@@ -7,12 +7,15 @@ points after all volleys wins.
 Features:
   * Procedural, fully destructible per-pixel terrain (craters, dirt piles)
   * Weapon PICK phase: players alternate drafting 10 weapons from a pool of 20
+  * ...or a ONE WEAPON match: both sides fire one chosen weapon for a
+    settable number of rounds (1-20)
   * 20 distinct weapons: splitters, rollers, diggers, napalm, lasers, nukes...
   * Wind that changes every turn and bends every shot
   * Tank movement with a limited fuel tank (and slopes too steep to climb)
   * 1-player mode vs. an aiming AI (Easy / Normal / Hard) or 2-player hotseat
   * Synthesized sound effects (stdlib; Windows winsound / macOS afplay)
-  * Config persistence (window position, mode, AI level) in %APPDATA%\\MyPocketTanks
+  * Config persistence (window position, mode, AI level, match style)
+    in %APPDATA%\\MyPocketTanks
 
 Controls (aiming):
   Left / Right .... turret angle    Up / Down ....... power
@@ -54,8 +57,9 @@ WIND_MAX = 10             # wind ranges -10 .. +10
 POWER_SPEED = 7.5         # muzzle speed px/s per point of power (0..100)
 SUBSTEPS = 4              # physics substeps per frame (terrain is per-pixel)
 
-ROUNDS = 10               # shots per player = weapons drafted per player
-POOL_SIZE = 2 * ROUNDS    # weapon cards offered in the pick phase
+ROUNDS = 10               # draft mode: shots per player = weapons drafted
+POOL_SIZE = 2 * ROUNDS    # weapon cards offered in the draft pick phase
+ROUNDS_MIN, ROUNDS_MAX = 1, 20   # settable shots-per-side, one-weapon mode
 FUEL_MAX = 100.0          # per-tank movement budget for the whole match
 FUEL_PER_PX = 0.5
 MAX_CLIMB = 2.5           # max slope (px rise per px run) a tank can drive up
@@ -417,6 +421,20 @@ class PocketTanks:
         self.ai_level = self.config.get("ai_level", "Normal")
         if self.ai_level not in AI_LEVELS:
             self.ai_level = "Normal"
+        # Match style: "draft" = alternate-pick 10 weapons from a pool;
+        # "single" = ONE chosen weapon arms both tanks for a settable
+        # number of rounds.
+        self.match_type = self.config.get("match_type", "draft")
+        if self.match_type not in ("draft", "single"):
+            self.match_type = "draft"
+        sr = self.config.get("single_rounds", ROUNDS)
+        if not (isinstance(sr, int) and ROUNDS_MIN <= sr <= ROUNDS_MAX):
+            sr = ROUNDS
+        self.single_rounds = sr
+        self.single_weapon = self.config.get("single_weapon", "single")
+        if self.single_weapon not in WEAPON_BY_KEY:
+            self.single_weapon = "single"
+        self.rounds = ROUNDS            # shots per side; set per match
 
         self.terrain = generate_terrain(self.rng)
         self.tanks = []
@@ -463,8 +481,14 @@ class PocketTanks:
         for t in self.tanks:
             t.settle(self.terrain)
         self.turn = self.rng.randint(0, 1)
-        self.picker = self.turn
-        self.pool = draft_pool(self.rng)
+        self.rounds = ROUNDS if self.match_type == "draft" \
+            else self.single_rounds
+        if self.match_type == "single":
+            self.pool = [w["key"] for w in WEAPONS]  # one card per weapon
+            self.picker = 0                          # a human picks for both
+        else:
+            self.pool = draft_pool(self.rng)
+            self.picker = self.turn
         self.shots_fired = [0, 0]
         self.projectiles, self.effects, self.flames = [], [], []
         self.winner = None
@@ -487,23 +511,36 @@ class PocketTanks:
 
     # ------------------------------------------------------------------ pick
     def pick_weapon(self, pool_index):
-        """Current picker drafts one card from the pool; alternate until each
-        side holds ROUNDS weapons, then combat begins."""
+        """Pick one card from the pool. Draft mode: players alternate until
+        each side holds self.rounds weapons. Single mode: the one chosen
+        weapon arms BOTH tanks for the whole match and combat begins."""
         if self.state != "pick" or not (0 <= pool_index < len(self.pool)):
+            return
+        if self.match_type == "single":
+            key = self.pool[pool_index]
+            self.single_weapon = key           # remembered (and persisted)
+            for t in self.tanks:
+                t.arsenal = [key] * self.rounds
+                t.weapon_i = 0
+            self.sound.play("pick")
+            self._begin_combat()
             return
         key = self.pool.pop(pool_index)
         self.tanks[self.picker].arsenal.append(key)
         self.sound.play("pick")
-        if all(len(t.arsenal) >= ROUNDS for t in self.tanks):
-            self.state = "playing"
-            self.phase = "aim"
-            self._set_toast(f"{self.current_tank().name} SHOOTS FIRST")
-            self.ai_wait = 45
+        if all(len(t.arsenal) >= self.rounds for t in self.tanks):
+            self._begin_combat()
             return
         self.picker = 1 - self.picker
-        if len(self.tanks[self.picker].arsenal) >= ROUNDS:
+        if len(self.tanks[self.picker].arsenal) >= self.rounds:
             self.picker = 1 - self.picker      # other side still drafting
         self.ai_wait = 20
+
+    def _begin_combat(self):
+        self.state = "playing"
+        self.phase = "aim"
+        self._set_toast(f"{self.current_tank().name} SHOOTS FIRST")
+        self.ai_wait = 45
 
     def _ai_pick(self):
         """AI drafts greedily by damage potential, with some randomness."""
@@ -927,18 +964,19 @@ class PocketTanks:
 
     def _end_turn(self):
         """Shot fully resolved: next player, or game over after all volleys."""
-        if all(s >= ROUNDS for s in self.shots_fired):
+        if all(s >= self.rounds for s in self.shots_fired):
             self._finish_game()
             return
         self.turn = 1 - self.turn
-        if self.shots_fired[self.turn] >= ROUNDS:   # ran dry first (odd start)
+        if self.shots_fired[self.turn] >= self.rounds:  # ran dry (odd start)
             self.turn = 1 - self.turn
         self._new_wind()
         self.phase = "aim"
         self.ai_plan = None
         self.ai_wait = 40
         shot = self.shots_fired[self.turn] + 1
-        self._set_toast(f"{self.current_tank().name} — SHOT {shot}/{ROUNDS}")
+        self._set_toast(f"{self.current_tank().name} — "
+                        f"SHOT {shot}/{self.rounds}")
 
     def _finish_game(self):
         self.state = "gameover"
@@ -1070,7 +1108,8 @@ class PocketTanks:
             if e["age"] >= e["frames"]:
                 self.effects.remove(e)
         if self.state == "pick":
-            if self.mode == "1P" and self.picker == 1:
+            if self.mode == "1P" and self.picker == 1 \
+                    and not self.confirm_menu:
                 if self.ai_wait > 0:
                     self.ai_wait -= 1
                 else:
@@ -1104,6 +1143,9 @@ class PocketTanks:
             return
         self.config["mode"] = self.mode
         self.config["ai_level"] = self.ai_level
+        self.config["match_type"] = self.match_type
+        self.config["single_rounds"] = self.single_rounds
+        self.config["single_weapon"] = self.single_weapon
         save_config(self.config)
 
     # -------------------------------------------------------------------- UI
@@ -1215,6 +1257,8 @@ class PocketTanks:
             c.create_rectangle(0, 0, WIN_W, WIN_H, fill=BG, width=0,
                                tags="dyn")
             self._draw_pick()
+            if self.confirm_menu:
+                self._draw_confirm()
             return
         self._draw_field()
         self._draw_panel()
@@ -1389,7 +1433,8 @@ class PocketTanks:
         mx = 320
         w = t.current_weapon()
         c.create_text(mx + 170, top + 18, text=f"{t.name} — SHOT "
-                      f"{min(ROUNDS, self.shots_fired[t.pid] + 1)}/{ROUNDS}",
+                      f"{min(self.rounds, self.shots_fired[t.pid] + 1)}"
+                      f"/{self.rounds}",
                       fill=t.color, font=(FONT, 11, "bold"), tags="dyn")
         self._button(mx, top + 34, mx + 40, top + 86, "◀", "wprev", live)
         self._button(mx + 300, top + 34, mx + 340, top + 86, "▶",
@@ -1405,14 +1450,19 @@ class PocketTanks:
                           fill=TEXT, font=(FONT, 13, "bold"), tags="dyn")
             c.create_text(mx + 88, top + 71, anchor="w", text=w["blurb"],
                           fill=SUBTEXT, font=(FONT, 9), tags="dyn")
-        # remaining arsenal dots
+        # remaining arsenal dots (pitch shrinks so long one-weapon
+        # arsenals still fit between the selector and the FIRE button)
+        n = len(t.arsenal)
+        pitch = min(26, 356 // n) if n else 26
+        dw = max(4, min(18, pitch - 8))
         for i, key in enumerate(t.arsenal):
             col = WEAPON_BY_KEY[key]["color"]
             outline = "#ffffff" if i == t.weapon_i else ""
-            c.create_rectangle(mx + 48 + i * 26, top + 96, mx + 66 + i * 26,
-                               top + 114, fill=col, outline=outline, width=2,
-                               tags="dyn")
-        c.create_text(mx + 170, top + 136, text="weapons left: "
+            x0 = mx + 48 + i * pitch
+            c.create_rectangle(x0, top + 96, x0 + dw, top + 114,
+                               fill=col, outline=outline, width=2, tags="dyn")
+        noun = "shots" if self.match_type == "single" else "weapons"
+        c.create_text(mx + 170, top + 136, text=f"{noun} left: "
                       f"{len(t.arsenal)}", fill=SUBTEXT, font=(FONT, 9),
                       tags="dyn")
 
@@ -1435,12 +1485,12 @@ class PocketTanks:
     def _draw_menu(self):
         c = self.canvas
         cx = WIN_W // 2
-        c.create_text(cx, 120, text="MY POCKET TANKS", fill=GOLD,
+        c.create_text(cx, 100, text="MY POCKET TANKS", fill=GOLD,
                       font=(FONT, 44, "bold"), tags="dyn")
-        c.create_text(cx, 168, text="artillery duel on destructible ground",
+        c.create_text(cx, 146, text="artillery duel on destructible ground",
                       fill=SUBTEXT, font=(FONT, 14), tags="dyn")
         # mode select
-        y = 260
+        y = 218
         c.create_text(cx - 260, y, anchor="w", text="MODE", fill=SUBTEXT,
                       font=(FONT, 13), tags="dyn")
         for i, (mode, label) in enumerate([("1P", "1 PLAYER vs COMPUTER"),
@@ -1450,7 +1500,7 @@ class PocketTanks:
             self._button(x0, y - 18, x0 + 245, y + 18, label, f"mode:{mode}",
                          True, fill="#26263a" if sel else BTN_BG,
                          fg=GOLD if sel else TEXT, size=11)
-        y = 330
+        y = 282
         if self.mode == "1P":
             c.create_text(cx - 260, y, anchor="w", text="AI", fill=SUBTEXT,
                           font=(FONT, 13), tags="dyn")
@@ -1461,16 +1511,47 @@ class PocketTanks:
                              name.upper(), f"ai:{name}", True,
                              fill="#26263a" if sel else BTN_BG,
                              fg=GOLD if sel else TEXT, size=11)
-            c.create_text(cx - 150, y + 34, anchor="w",
+            c.create_text(cx - 150, y + 32, anchor="w",
                           text=AI_LEVELS[self.ai_level]["blurb"],
                           fill=SUBTEXT, font=(FONT, 10), tags="dyn")
-        self._button(cx - 130, 420, cx + 130, 478, "S T A R T", "start",
+        # match style: classic draft, or one weapon for a settable rounds
+        y = 352
+        c.create_text(cx - 260, y, anchor="w", text="MATCH", fill=SUBTEXT,
+                      font=(FONT, 13), tags="dyn")
+        for i, (mt, label) in enumerate([("draft", "DRAFT 10 FROM POOL"),
+                                         ("single", "ONE WEAPON ONLY")]):
+            sel = self.match_type == mt
+            x0 = cx - 150 + i * 260
+            self._button(x0, y - 18, x0 + 245, y + 18, label, f"match:{mt}",
+                         True, fill="#26263a" if sel else BTN_BG,
+                         fg=GOLD if sel else TEXT, size=11)
+        if self.match_type == "single":
+            y = 416
+            c.create_text(cx - 260, y, anchor="w", text="ROUNDS",
+                          fill=SUBTEXT, font=(FONT, 13), tags="dyn")
+            self._button(cx - 150, y - 18, cx - 114, y + 18, "-", "rounds-",
+                         self.single_rounds > ROUNDS_MIN)
+            c.create_text(cx - 80, y, text=str(self.single_rounds),
+                          fill=GOLD, font=(FONT, 16, "bold"), tags="dyn")
+            self._button(cx - 46, y - 18, cx - 10, y + 18, "+", "rounds+",
+                         self.single_rounds < ROUNDS_MAX)
+            c.create_text(cx + 20, y, anchor="w",
+                          text="shots per tank — pick the weapon next",
+                          fill=SUBTEXT, font=(FONT, 10), tags="dyn")
+        self._button(cx - 130, 450, cx + 130, 508, "S T A R T", "start",
                      True, fill="#183822", fg="#7ee08a", size=20)
-        c.create_text(cx, 530, fill=SUBTEXT, font=(FONT, 10), justify="center",
-                      text="Draft 10 weapons each, then take turns: "
-                           f"{ROUNDS} shots per side.\n"
-                           "Damage dealt = points scored. Self-damage scores "
-                           "for your opponent. Most points wins.",
+        if self.match_type == "single":
+            n = self.single_rounds
+            what = ("Pick ONE weapon; both tanks fire it every round: "
+                    f"{n} shot{'s' if n != 1 else ''} per side.")
+        else:
+            what = ("Draft 10 weapons each, then take turns: "
+                    f"{ROUNDS} shots per side.")
+        c.create_text(cx, 548, fill=SUBTEXT, font=(FONT, 10),
+                      justify="center",
+                      text=what + "\nDamage dealt = points scored. "
+                           "Self-damage scores for your opponent. "
+                           "Most points wins.",
                       tags="dyn")
         c.create_text(cx, WIN_H - 60, fill="#55556a", font=(FONT, 10),
                       justify="center",
@@ -1483,20 +1564,32 @@ class PocketTanks:
     def _draw_pick(self):
         c = self.canvas
         cx = WIN_W // 2
-        picker = self.tanks[self.picker]
-        c.create_text(cx, 34, text="WEAPON DRAFT", fill=GOLD,
-                      font=(FONT, 24, "bold"), tags="dyn")
-        who = f"{picker.name} PICKS" if not (self.mode == "1P" and
-                                             self.picker == 1) \
-            else "COMPUTER IS PICKING..."
-        c.create_text(cx, 66, text=who, fill=picker.color,
-                      font=(FONT, 15, "bold"), tags="dyn")
-        for pid, t in enumerate(self.tanks):
-            x = 130 if pid == 0 else WIN_W - 130
-            c.create_text(x, 34, text=f"{t.name}: {len(t.arsenal)}/{ROUNDS}",
-                          fill=t.color, font=(FONT, 11, "bold"), tags="dyn")
+        single = self.match_type == "single"
+        if single:
+            c.create_text(cx, 34, text="CHOOSE THE MATCH WEAPON", fill=GOLD,
+                          font=(FONT, 24, "bold"), tags="dyn")
+            c.create_text(cx, 66, text="both tanks fire it for all "
+                          f"{self.rounds} round"
+                          f"{'s' if self.rounds != 1 else ''}",
+                          fill=TEXT, font=(FONT, 13, "bold"), tags="dyn")
+        else:
+            picker = self.tanks[self.picker]
+            c.create_text(cx, 34, text="WEAPON DRAFT", fill=GOLD,
+                          font=(FONT, 24, "bold"), tags="dyn")
+            who = f"{picker.name} PICKS" if not (self.mode == "1P" and
+                                                 self.picker == 1) \
+                else "COMPUTER IS PICKING..."
+            c.create_text(cx, 66, text=who, fill=picker.color,
+                          font=(FONT, 15, "bold"), tags="dyn")
+            for pid, t in enumerate(self.tanks):
+                x = 130 if pid == 0 else WIN_W - 130
+                c.create_text(x, 34, text=f"{t.name}: "
+                              f"{len(t.arsenal)}/{self.rounds}",
+                              fill=t.color, font=(FONT, 11, "bold"),
+                              tags="dyn")
         # cards, 5 x 4 grid
-        human_turn = not (self.mode == "1P" and self.picker == 1)
+        human_turn = (single or not (self.mode == "1P" and self.picker == 1)) \
+            and not self.confirm_menu
         cols, cw, ch, gap = 5, 182, 96, 8
         gx = (WIN_W - cols * cw - (cols - 1) * gap) / 2
         gy = 96
@@ -1505,8 +1598,10 @@ class PocketTanks:
             col, row = i % cols, i // cols
             x0 = gx + col * (cw + gap)
             y0 = gy + row * (ch + gap)
+            last = single and key == self.single_weapon
             self._round_rect(x0, y0, x0 + cw, y0 + ch, 12, fill="#191926",
-                             outline=BTN_EDGE, width=1, tags="dyn")
+                             outline=GOLD if last else BTN_EDGE,
+                             width=2 if last else 1, tags="dyn")
             c.create_rectangle(x0 + 10, y0 + 12, x0 + 26, y0 + 40,
                                fill=w["color"], width=0, tags="dyn")
             c.create_text(x0 + 34, y0 + 20, anchor="w", text=w["name"],
@@ -1518,10 +1613,12 @@ class PocketTanks:
                           fill=SUBTEXT, font=(FONT, 9), tags="dyn")
             if human_turn:
                 self.buttons.append((x0, y0, x0 + cw, y0 + ch, f"pick:{i}"))
+        hint = ("click the weapon both tanks will use for the whole match"
+                if single else
+                "click a card to draft it — "
+                "you alternate picks with your opponent")
         c.create_text(cx, WIN_H - 40, fill="#55556a", font=(FONT, 10),
-                      text="click a card to draft it — "
-                           "you alternate picks with your opponent",
-                      tags="dyn")
+                      text=hint, tags="dyn")
 
     # ------------------------------------------------------------- overlays
     def _draw_gameover(self):
@@ -1568,6 +1665,15 @@ class PocketTanks:
             self.sound.play("blip")
         elif action.startswith("ai:"):
             self.ai_level = action[3:]
+            self.sound.play("blip")
+        elif action.startswith("match:"):
+            self.match_type = action[6:]
+            self.sound.play("blip")
+        elif action == "rounds-":
+            self.single_rounds = max(ROUNDS_MIN, self.single_rounds - 1)
+            self.sound.play("blip")
+        elif action == "rounds+":
+            self.single_rounds = min(ROUNDS_MAX, self.single_rounds + 1)
             self.sound.play("blip")
         elif action.startswith("pick:"):
             self.pick_weapon(int(action[5:]))
@@ -1757,6 +1863,33 @@ def selftest():
         s0, s1 = g.tanks[0].score, g.tanks[1].score
         print(f"  match ok: AI {level:<6} — final {s0} : {s1} "
               f"({frames} frames)")
+
+    # 4. One-weapon matches: both tanks share one weapon for N rounds.
+    for rounds, wkey in ((1, "bigone"), (4, "triple")):
+        g = PocketTanks(root=None, enable_sound=False, persist=False,
+                        seed=rounds)
+        g.mode = "1P"
+        g.ai_level = "Easy"
+        g.match_type = "single"
+        g.single_rounds = rounds
+        g.start_match()
+        assert g.state == "pick" and len(g.pool) == len(WEAPONS), \
+            "single mode should offer every weapon"
+        g.pick_weapon(g.pool.index(wkey))
+        assert g.state == "playing", "single pick did not start combat"
+        assert all(t.arsenal == [wkey] * rounds for t in g.tanks), \
+            "both tanks should hold the chosen weapon x rounds"
+        g.tanks[0].is_ai = True            # both sides play themselves
+        frames = 0
+        while g.state != "gameover" and frames < 200000:
+            g.step()
+            frames += 1
+        assert g.state == "gameover", f"one-weapon x{rounds}: never finished"
+        assert g.shots_fired == [rounds, rounds], \
+            f"one-weapon: shots_fired={g.shots_fired}"
+        _assert_terrain_ok(g, f"one-weapon {wkey}")
+        print(f"  one-weapon ok: {wkey} x{rounds} — "
+              f"{g.tanks[0].score}:{g.tanks[1].score}")
 
     print("All selftests passed.")
 

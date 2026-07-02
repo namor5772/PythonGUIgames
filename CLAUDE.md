@@ -45,6 +45,11 @@ headless — `step()` is pure logic driven by `--selftest`; `tick()` = `step()` 
 
 - **State machine:** `state in {menu, pick, playing, gameover}` plus a
   `confirm_menu` modal flag; within `playing`, `phase in {aim, flight}`.
+- **Two match styles:** `match_type` `"draft"` (alternate-pick 10 from a
+  20-card pool) or `"single"` (one chosen weapon arms both tanks for
+  `single_rounds` = 1–20 shots each; the pick screen shows all 20 weapons and
+  one click starts combat). `self.rounds` is the live per-match shot count —
+  branch on it, not the `ROUNDS` constant (that's draft's fixed 10).
 - **Terrain is a per-column heightmap** (`terrain[x]` = surface y). Explosions
   carve circles, dirt weapons raise columns; no overhangs by design — that's
   what keeps physics/repaints simple. Rendered into one `tk.PhotoImage`;
@@ -58,7 +63,8 @@ headless — `step()` is pure logic driven by `--selftest`; `tick()` = `step()` 
 - **AI** picks angle/power by simulating real trajectories
   (`_simulate_shot`), then blurs the answer by difficulty `aim_err`.
 - **Persistence:** `%APPDATA%\MyPocketTanks\config.json` (window pos, mode,
-  AI level), gated by the `persist` flag like MyTetris.
+  AI level, match style/rounds/last one-weapon pick), gated by the `persist`
+  flag like MyTetris.
 
 ## MyTetris architecture
 

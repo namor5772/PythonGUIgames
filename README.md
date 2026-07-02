@@ -146,8 +146,12 @@ point of damage you deal is a point on the scoreboard, and whoever has the
 most points after all volleys **wins**. (Damaging yourself scores for your
 opponent!)
 
-- **Weapon draft** — before combat, players alternate picking **10 weapons
-  each** from a randomized pool of 20 cards, so every match plays differently.
+- **Two match styles** — the classic **draft** (players alternate picking
+  **10 weapons each** from a randomized pool of 20 cards, so every match
+  plays differently), or a **one-weapon match**: choose a single weapon that
+  *both* tanks fire for a settable **1–20 rounds** — set the round count on
+  the menu, then click the weapon on the pick screen (your last pick is
+  highlighted in gold).
 - **20 distinct weapons** — simple shells and big blasts; multi-shot spreads
   (Triple Shot, Buckshot, Cluster Pod, Pentabomb — a 5-way MIRV); terrain
   tools (Dirt Ball, Excavator, Dirt Slinger, Drill Bit, Tremor); and exotics
@@ -177,10 +181,11 @@ opponent!)
 | Space / Enter | **FIRE** | M | Mute / unmute |
 | Esc | Back to menu (asks first) | R | Rematch (after game over) |
 
-Config (window position, last mode, AI level) persists in
-`%APPDATA%\MyPocketTanks\config.json` (macOS/Linux: `~/MyPocketTanks/`), and
-`--selftest` fires every weapon headlessly plus plays full AI-vs-AI matches at
-every difficulty.
+Config (window position, last mode, AI level, match style, one-weapon round
+count and last weapon) persists in `%APPDATA%\MyPocketTanks\config.json`
+(macOS/Linux: `~/MyPocketTanks/`), and `--selftest` fires every weapon
+headlessly plus plays full AI-vs-AI matches at every difficulty, including
+one-weapon matches.
 
 ## Desktop shortcuts
 
@@ -261,7 +266,7 @@ anywhere in the stack). Every Tetris player feels this.
 | Script | Description |
 | --- | --- |
 | `MyTetris.py` | The game — accurate Tetris clone (SRS, 7-bag, DAS, ghost, hold, next-3, T-spins, back-to-back, start menu, difficulty, sound, high scores) plus a headless `--selftest`. |
-| `MyPocketTanks.py` | Artillery duel — weapon draft, 20 weapons, destructible terrain, wind, fuel-limited movement, AI or hotseat, sound — plus a headless `--selftest`. |
+| `MyPocketTanks.py` | Artillery duel — weapon draft or one-weapon matches (settable 1–20 rounds), 20 weapons, destructible terrain, wind, fuel-limited movement, AI or hotseat, sound — plus a headless `--selftest`. |
 | `make_tetris_icon.py` | **Windows icon** — generates `mytetris.ico` by writing the ICO/BMP bytes directly (no Pillow). |
 | `make_pockettanks_icon.py` | **Windows icon** — generates `mypockettanks.ico` (tank, shell arc, explosion, starry sky); reuses `make_tetris_icon.build_ico()`. No Pillow. |
 | `make_troll_icon.py` | **Windows funny icon** — generates `mytetris_troll.ico` (*The Troll Piece*) as a multi-resolution ICO (256 px PNG + 48/32/16 px BMP), reusing the macOS scene. No Pillow. |
