@@ -177,9 +177,10 @@ opponent!)
 | Key | Action | Key | Action |
 | --- | --- | --- | --- |
 | ← / → | Turret angle (Shift = ×5) | ↑ / ↓ | Power (Shift = ×5) |
-| A / D | Drive tank (uses fuel) | Tab / `[` `]` | Cycle weapon |
-| Space / Enter | **FIRE** | M | Mute / unmute |
-| Esc | Back to menu (asks first) | R | Rematch (after game over) |
+| End / Home | Angle up / down (Shift = ×5) | A / D | Drive tank (uses fuel) |
+| Tab / `[` `]` | Cycle weapon | Space / Enter | **FIRE** |
+| M | Mute / unmute | Esc | Back to menu (asks first) |
+| R | Rematch (after game over) | | |
 
 Config (window position, last mode, AI level, match style, one-weapon round
 count and last weapon) persists in `%APPDATA%\MyPocketTanks\config.json`

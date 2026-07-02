@@ -19,9 +19,10 @@ Features:
 
 Controls (aiming):
   Left / Right .... turret angle    Up / Down ....... power
-  A / D ........... move tank       Tab / [ ] ....... cycle weapon
-  Space / Enter ... FIRE            M ............... mute
-  Esc ............. menu (asks)     Mouse ........... all panel buttons work too
+  End / Home ...... angle + / -     A / D ........... move tank
+  Tab / [ ] ....... cycle weapon    Space / Enter ... FIRE
+  M ............... mute            Esc ............. menu (asks)
+  Mouse ........... all panel buttons work too
 
 Run:  python MyPocketTanks.py       Self-test (headless):  python MyPocketTanks.py --selftest
 """
@@ -1425,7 +1426,7 @@ class PocketTanks:
                            lx + 91 + 146 * t.fuel / FUEL_MAX, top + 137,
                            fill="#2ecc55", width=0, tags="dyn")
         c.create_text(lx, top + 162, anchor="w",
-                      text="keys: ←→ angle  ↑↓ power  "
+                      text="keys: ←→ or End/Home angle  ↑↓ power  "
                            "A/D move  Tab weapon  Space fire",
                       fill="#55556a", font=(FONT, 9), tags="dyn")
 
@@ -1555,7 +1556,7 @@ class PocketTanks:
                       tags="dyn")
         c.create_text(cx, WIN_H - 60, fill="#55556a", font=(FONT, 10),
                       justify="center",
-                      text="←→ angle   ↑↓ power   A/D move"
+                      text="←→ or End/Home angle   ↑↓ power   A/D move"
                            "   Tab/[ ] weapon   Space fire   M mute   "
                            "Esc menu\nEnter/click START to play",
                       tags="dyn")
@@ -1747,6 +1748,10 @@ class PocketTanks:
             self.adjust_angle(step)      # left = raise toward the left
         elif key == "Right":
             self.adjust_angle(-step)
+        elif key in ("End", "KP_End"):
+            self.adjust_angle(step)      # End = angle readout up
+        elif key in ("Home", "KP_Home"):
+            self.adjust_angle(-step)     # Home = angle readout down
         elif key == "Up":
             self.adjust_power(step)
         elif key == "Down":
