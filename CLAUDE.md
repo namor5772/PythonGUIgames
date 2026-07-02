@@ -132,5 +132,6 @@ testable headlessly. Preserve it.
 | `make_pockettanks_icon.py` | Generates `mypockettanks.ico` (tank + shell arc + explosion scene). Reuses `make_tetris_icon.build_ico()`; no Pillow. |
 | `make_troll_icon.py` | Generates `mytetris_troll.ico` — the funny "Troll Piece" as a multi-resolution Windows ICO (256px PNG + 48/32/16 BMP). Reuses `make_tetris_icon_mac.build_scene()` and downsamples; no Pillow. |
 | `make_tetris_icon_mac.py` | Generates `mytetris.png` (the macOS "Troll Piece" icon) by writing the PNG bytes directly (zlib + chunks, no Pillow). |
+| `make_pockettanks_icon_mac.py` | Generates `mypockettanks.png` (macOS, 1024px) — the same artillery-duel scene as the ICO, rendered natively; reuses `make_tetris_icon_mac`'s rasterizer/PNG writer. |
 | `create_shortcut.ps1` | **Windows** Desktop `.lnk`; parameterized `-Script` / `-Icon` / `-Name`, defaults to MyTetris. |
-| `create_shortcut.command` | **macOS**: `sips`+`iconutil` build `mytetris.icns`, then assemble a clickable `.app` on the Desktop. Bakes in the found `python3` (Finder gives apps a minimal PATH) and absolute project paths. |
+| `create_shortcut.command` | **macOS**: `sips`+`iconutil` build the `.icns`, then assemble a clickable `.app` on the Desktop. Args: name, script, icon PNG (defaults = MyTetris). Bakes in the found `python3` (Finder gives apps a minimal PATH) and absolute project paths. |

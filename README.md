@@ -252,10 +252,21 @@ straight toward the one 1-wide well you've spent twenty turns praying to fill wi
 the long cyan I-piece... which, of course, never came (note there's no cyan
 anywhere in the stack). Every Tetris player feels this.
 
-`create_shortcut.command` takes the same optional name / target script:
+**MyPocketTanks shortcut:**
 
 ```bash
-./create_shortcut.command "My App" MyApp.py
+python3 make_pockettanks_icon_mac.py
+./create_shortcut.command MyPocketTanks MyPocketTanks.py mypockettanks.png
+```
+
+This writes **`mypockettanks.png`** (the same artillery-duel scene as the Windows
+icon, rendered natively at 1024 px), packs it into **`mypockettanks.icns`**, and
+creates **`MyPocketTanks.app`** on your Desktop.
+
+`create_shortcut.command` takes the same optional name / target script / icon:
+
+```bash
+./create_shortcut.command "My App" MyApp.py myapp.png
 ```
 
 > Both shortcut builders bake in **absolute paths**, so re-run the relevant script
@@ -272,8 +283,9 @@ anywhere in the stack). Every Tetris player feels this.
 | `make_pockettanks_icon.py` | **Windows icon** — generates `mypockettanks.ico` (tank, shell arc, explosion, starry sky); reuses `make_tetris_icon.build_ico()`. No Pillow. |
 | `make_troll_icon.py` | **Windows funny icon** — generates `mytetris_troll.ico` (*The Troll Piece*) as a multi-resolution ICO (256 px PNG + 48/32/16 px BMP), reusing the macOS scene. No Pillow. |
 | `make_tetris_icon_mac.py` | **macOS icon** — generates `mytetris.png` (*The Troll Piece*) by writing the PNG bytes directly (zlib + chunks, no Pillow). |
+| `make_pockettanks_icon_mac.py` | **macOS icon** — generates `mypockettanks.png` (the artillery duel at 1024 px), reusing `make_tetris_icon_mac.py`'s rasterizer + PNG writer. No Pillow. |
 | `create_shortcut.ps1` | **Windows** — creates a Desktop `.lnk` for any app (parameterized: `-Script`, `-Icon`, `-Name`). |
-| `create_shortcut.command` | **macOS** — builds `mytetris.icns` and a clickable `.app` on the Desktop (optional args: name, target script). |
+| `create_shortcut.command` | **macOS** — builds an `.icns` and a clickable `.app` on the Desktop (optional args: name, target script, icon PNG; defaults to MyTetris). |
 
 ## License
 

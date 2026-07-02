@@ -1,13 +1,14 @@
 #!/bin/bash
-# Builds a clickable Desktop shortcut for MyTetris on macOS.
+# Builds a clickable Desktop shortcut for this project's games on macOS.
 #
-# It turns mytetris.png (see make_tetris_icon_mac.py) into a proper mytetris.icns
-# and assembles a double-clickable <Name>.app bundle on the Desktop whose
-# launcher runs the project's script with python3 — the macOS counterpart of
+# It turns a master PNG (see make_*_icon_mac.py) into a proper .icns and
+# assembles a double-clickable <Name>.app bundle on the Desktop whose launcher
+# runs the project's script with python3 — the macOS counterpart of
 # create_shortcut.ps1.
 #
 #   ./create_shortcut.command                 # default "MyTetris" / MyTetris.py
-#   ./create_shortcut.command "My App" App.py # custom name / target script
+#   ./create_shortcut.command MyPocketTanks MyPocketTanks.py mypockettanks.png
+#   ./create_shortcut.command "My App" App.py myapp.png
 #
 # Pure system tools only (bash, sips, iconutil) — no third-party packages.
 
@@ -15,6 +16,8 @@ set -euo pipefail
 
 NAME="${1:-MyTetris}"
 SCRIPT="${2:-MyTetris.py}"
+PNG="${3:-mytetris.png}"
+BASE="${PNG%.png}"          # mytetris.png -> mytetris(.icns)
 
 # Resolve the project directory (where this script lives), even via symlink.
 SOURCE="${BASH_SOURCE[0]}"
@@ -32,10 +35,17 @@ PYTHON="$(command -v python3 || true)"
 
 cd "$PROJECT_DIR"
 
-# 1) Make sure the master PNG exists, then build a multi-resolution .icns.
-[ -f mytetris.png ] || "$PYTHON" make_tetris_icon_mac.py
+# 1) Make sure the master PNG exists (running its generator if we know it),
+#    then build a multi-resolution .icns.
+if [ ! -f "$PNG" ]; then
+    case "$PNG" in
+        mytetris.png)      "$PYTHON" make_tetris_icon_mac.py ;;
+        mypockettanks.png) "$PYTHON" make_pockettanks_icon_mac.py ;;
+        *) echo "Icon $PNG not found (and no known generator for it)"; exit 1 ;;
+    esac
+fi
 
-ICONSET="$(mktemp -d)/mytetris.iconset"
+ICONSET="$(mktemp -d)/$BASE.iconset"
 mkdir -p "$ICONSET"
 # (target filename : pixel size) — the set Apple's iconutil expects.
 for spec in \
@@ -45,17 +55,17 @@ for spec in \
     "icon_256x256:256"     "icon_256x256@2x:512" \
     "icon_512x512:512"     "icon_512x512@2x:1024"; do
     out="${spec%%:*}"; sz="${spec##*:}"
-    sips -z "$sz" "$sz" mytetris.png --out "$ICONSET/${out}.png" >/dev/null
+    sips -z "$sz" "$sz" "$PNG" --out "$ICONSET/${out}.png" >/dev/null
 done
-iconutil -c icns "$ICONSET" -o mytetris.icns
+iconutil -c icns "$ICONSET" -o "$BASE.icns"
 rm -rf "$(dirname "$ICONSET")"
-echo "Built mytetris.icns"
+echo "Built $BASE.icns"
 
 # 2) Assemble the .app bundle on the Desktop.
 APP="$HOME/Desktop/$NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp mytetris.icns "$APP/Contents/Resources/mytetris.icns"
+cp "$BASE.icns" "$APP/Contents/Resources/$BASE.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -69,7 +79,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundlePackageType</key>      <string>APPL</string>
     <key>CFBundleExecutable</key>       <string>$NAME</string>
-    <key>CFBundleIconFile</key>         <string>mytetris</string>
+    <key>CFBundleIconFile</key>         <string>$BASE</string>
     <key>NSHighResolutionCapable</key>  <true/>
     <key>LSMinimumSystemVersion</key>   <string>10.13</string>
 </dict>
