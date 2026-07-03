@@ -177,7 +177,7 @@ def _sun_azimuth(lat, decl, ha_deg):
 def parse_horizon(s):
     """Skyline entry -> profile. '' / '0' -> [] (flat); a single number ->
     uniform hills; 'az:alt, az:alt, ...' -> a profile (N=0, E=90)."""
-    s = (s or "").strip()
+    s = _clean_numeric(s)
     if not s:
         return []
     parts = [p.strip() for p in s.split(",") if p.strip()]
@@ -405,9 +405,67 @@ def parse_offset(s):
     return sign * (int(h) * 60 + int(m))
 
 
+# Copy-pasted numbers (e.g. coordinates from Wikipedia / Google Maps) arrive
+# with Unicode minus signs, degree marks, hard spaces and invisible characters
+# that float() rejects even though they look identical on screen.
+_NUM_TRANS = str.maketrans({
+    "\u2212": "-",                        # true minus (the web favorite)
+    "\u2010": "-", "\u2011": "-",        # hyphen, non-breaking hyphen
+    "\u2012": "-", "\u2013": "-",        # figure dash, en dash
+    "\u2014": "-",                        # em dash
+    "\u00a0": " ", "\u2007": " ",        # no-break / figure spaces
+    "\u2009": " ", "\u202f": " ",        # thin / narrow no-break spaces
+    "\u200b": "", "\ufeff": "",          # zero-width space, BOM
+})
+
+
+def _clean_numeric(s):
+    return (s or "").translate(_NUM_TRANS).strip()
+
+
+_ANGLE_SPLIT = re.compile(r"[\s°º˚′″’”'\"]+")
+
+
+def parse_angle(s):
+    """Latitude/longitude entry -> signed decimal degrees.
+
+    Accepts plain decimals ('-34.2195833'), web-pasted text with Unicode
+    minus / degree marks ('−34.2195833°'), a hemisphere letter
+    ('34.2195833 S', 'E 149.36625') and degrees-minutes-seconds
+    ('34°13′10.5″ S', '34 13 10.5S'). A hemisphere letter
+    wins over any sign: S/W make the value negative.
+    """
+    s = _clean_numeric(s)
+    hemi = 0.0
+    m = re.search(r"([NSEWnsew])\s*$", s)
+    if m:
+        hemi = -1.0 if m.group(1).upper() in "SW" else 1.0
+        s = s[:m.start()].strip()
+    else:
+        m = re.match(r"^([NSEWnsew])\s*(?=[\d+.\-])", s)
+        if m:
+            hemi = -1.0 if m.group(1).upper() in "SW" else 1.0
+            s = s[m.end():].strip()
+    if not s:
+        raise ValueError("empty angle")
+    neg = s.startswith("-")
+    parts = [p for p in _ANGLE_SPLIT.split(s.lstrip("+-")) if p]
+    if not 1 <= len(parts) <= 3:
+        raise ValueError("not an angle")
+    deg = float(parts[0])
+    minutes = float(parts[1]) if len(parts) > 1 else 0.0
+    seconds = float(parts[2]) if len(parts) > 2 else 0.0
+    if not (0.0 <= minutes < 60.0 and 0.0 <= seconds < 60.0):
+        raise ValueError("minutes/seconds out of range")
+    value = deg + minutes / 60.0 + seconds / 3600.0
+    if hemi:
+        return abs(value) * hemi
+    return -value if neg else value
+
+
 def parse_tz_hours(s):
     """User-typed fixed offset: '10', '-3.5', '9:30', '+5:45' -> hours."""
-    s = s.strip()
+    s = _clean_numeric(s)
     if not s:
         raise ValueError("empty offset")
     sign = -1.0 if s[0] == "-" else 1.0
@@ -788,7 +846,8 @@ class Sun2Set:
                                          saved("lat", "%.4f" % self.lat))
         self.lon_entry = self._entry_row(panel, "Longitude",
                                          saved("lon", "%.4f" % self.lon))
-        self._hint(panel, "degrees: + = north / east")
+        self._hint(panel, "degrees (+ = N/E); paste or DMS OK,")
+        self._hint(panel, "e.g. -34.2196 or 34°13'10.5\" S")
 
         self._section(panel, "TIME ZONE")
         self.tz_var = tk.StringVar(master=root, value=self.tz_mode)
@@ -1019,17 +1078,19 @@ class Sun2Set:
     def _read_form(self):
         """Entries -> attributes. Returns an error message or None."""
         try:
-            lat = float(self.lat_entry.get().strip())
+            lat = parse_angle(self.lat_entry.get())
             if not -90.0 <= lat <= 90.0:
                 raise ValueError
         except ValueError:
-            return "Latitude must be a number in -90..90"
+            return ("Latitude must be -90..90 — e.g. -34.2196, "
+                    "34.2196 S or 34°13'10.5\" S")
         try:
-            lon = float(self.lon_entry.get().strip())
+            lon = parse_angle(self.lon_entry.get())
             if not -180.0 <= lon <= 180.0:
                 raise ValueError
         except ValueError:
-            return "Longitude must be a number in -180..180"
+            return ("Longitude must be -180..180 — e.g. 149.3663, "
+                    "149.3663 E or 149°21'58.5\" E")
         tz_mode = self.tz_var.get()
         fixed, dst_hours = self.fixed_hours, self.dst_hours
         dst_on = bool(self.dst_on_var.get())
@@ -1461,9 +1522,12 @@ def selftest():
     assert rows3_b == rows3
     print("  table text round-trip OK (incl. polar rows)")
 
-    # 9. The fixed-offset entry parser.
+    # 9. The entry parsers: fixed offsets, and coordinates as typed OR as
+    #    pasted from the web (Unicode minus U+2212, degree marks, hemisphere
+    #    letters, DMS). Binda NSW's Wikipedia coordinate is the test case.
     for s, want in (("10", 10.0), ("+10", 10.0), ("-3.5", -3.5),
-                    ("9:30", 9.5), ("-3:30", -3.5), ("5.75", 5.75), ("0", 0.0)):
+                    ("9:30", 9.5), ("-3:30", -3.5), ("5.75", 5.75), ("0", 0.0),
+                    ("−3:30", -3.5)):
         assert parse_tz_hours(s) == want, s
     for bad in ("abc", "", "15", "-15", "10:xx"):
         try:
@@ -1471,7 +1535,28 @@ def selftest():
             raise AssertionError("parse_tz_hours accepted %r" % bad)
         except ValueError:
             pass
-    print("  offset parser OK")
+    binda = 34.0 + 13.0 / 60.0 + 10.5 / 3600.0     # 34.2195833...
+    for s, want in (("-34.2195833", -34.2195833),
+                    ("−34.2195833", -34.2195833),      # unicode minus
+                    ("-34.2195833°", -34.2195833),     # degree sign
+                    ("−34.2195833 ", -34.2195833),  # hard space
+                    ("34.2195833 S", -34.2195833),
+                    ("-34.2195833 s", -34.2195833),         # S beats the sign
+                    ("149.36625 E", 149.36625),
+                    ("W 71.06", -71.06),
+                    ("34°13′10.5″S", -binda),
+                    ("34 13 10.5 S", -binda),
+                    ("34°13'10.5\" S", -binda),
+                    ("0", 0.0)):
+        got = parse_angle(s)
+        assert abs(got - want) < 1e-9, (s, got, want)
+    for bad in ("", "abc", "34,22", "12 61", "1 2 3 4", "12 30 -5"):
+        try:
+            parse_angle(bad)
+            raise AssertionError("parse_angle accepted %r" % bad)
+        except ValueError:
+            pass
+    print("  entry parsers OK (incl. web-pasted coordinates)")
 
     # 10. Window-position parsing (negative coords = monitor left of/above
     #     the primary; a naive split('+') mangles them).

@@ -111,6 +111,12 @@ never touch Tk (tk Vars are created only inside `_build_gui`).
   contiguous run). Never plot `None` as 0.
 - **Gotcha:** `Canvas.tkraise()` raises canvas *items*, not the widget — the
   GRAPH/TABLE tab switcher raises wrapper Frames instead.
+- **Gotcha:** coordinates pasted from the web contain a Unicode minus
+  (U+2212), degree marks and no-break/zero-width spaces that `float()`
+  rejects while looking identical on screen (real bug report: Binda NSW's
+  Wikipedia latitude). `parse_angle` + `_clean_numeric` normalize these and
+  accept hemisphere letters and DMS — don't regress lat/lon parsing to a
+  bare `float()`. The offset/skyline parsers share `_clean_numeric`.
 - **Theming:** every GUI color comes from `THEMES[self.theme]` via `self.T`
   — no color literals in widget/graph code (the graph aliases it as `th`
   because `T` is the plot's top margin there). The THEME toggle rebuilds the

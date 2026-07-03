@@ -203,10 +203,13 @@ one-weapon matches.
 ## Sun2Set
 
 A bonus **non-game** app in the same stdlib-only Tkinter style: a **sunrise /
-sunset almanac**. Type a latitude / longitude, choose how the time zone should
-be handled, and it computes **sunrise, sunset and day length for today and
-every day for a year ahead** (366 rows by default; 1–1500 settable, any start
-date).
+sunset almanac**. Type a latitude / longitude — decimals (`-34.2196`),
+hemisphere letters (`34.2196 S`), degrees-minutes-seconds
+(`34°13'10.5" S`), or text pasted straight from Wikipedia / Google Maps
+(Unicode minus signs, degree marks and hidden spaces are all handled) —
+choose how the time zone should be handled, and it computes **sunrise,
+sunset and day length for today and every day for a year ahead** (366 rows
+by default; 1–1500 settable, any start date).
 
 - **Accurate** — NOAA solar-position equations (Jean Meeus), with the solar
   declination and the equation of time re-evaluated *at each event's own
