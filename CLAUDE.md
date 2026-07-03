@@ -120,9 +120,15 @@ never touch Tk (tk Vars are created only inside `_build_gui`).
   rects, same trick as MyPocketTanks); the DST rule dropdowns are
   `RoundMenuButton`s that pop a `tk.Menu` — plain tk widgets can't round
   their corners.
-- **Persistence:** `%APPDATA%\Sun2Set\config.json` (window pos + last params)
-  and an autosave of the latest table to `%APPDATA%\Sun2Set\sun2set_latest.txt`
-  on every Calculate — both gated by the `persist` flag like the games.
+- **Persistence:** `%APPDATA%\Sun2Set\config.json` stores the window
+  position (via `_wm_position` — a naive `split('+')` mangles negative
+  multi-monitor coordinates), theme, active tab, the last-validated params
+  *and* a raw `form` snapshot of every entry exactly as typed; the snapshot
+  is restored verbatim on launch (it wins over the validated fallbacks), so
+  even never-calculated edits survive restarts. Plus an autosave of the
+  latest table to `%APPDATA%\Sun2Set\sun2set_latest.txt` on every
+  Calculate. All gated by the `persist` flag like the games; test with an
+  isolated `APPDATA` env var so the real config stays safe.
 
 ## MyTetris architecture
 

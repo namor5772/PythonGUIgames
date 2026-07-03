@@ -36,6 +36,7 @@ import datetime as dt
 import json
 import math
 import os
+import re
 import sys
 import time
 import tkinter as tk
@@ -512,6 +513,13 @@ def _config_path():
     return os.path.join(_appdata_dir(), "config.json")
 
 
+def _wm_position(geometry):
+    """'1180x762+208+208' -> '+208+208'. A plain split('+') would mangle
+    negative coordinates (a monitor left of / above the primary)."""
+    m = re.match(r"\d+x\d+([+-]\d+[+-]\d+)$", geometry)
+    return m.group(1) if m else "+100+100"
+
+
 def load_config():
     try:
         with open(_config_path(), "r", encoding="utf-8") as f:
@@ -650,7 +658,15 @@ class Sun2Set:
         self.theme = cfg.get("theme") if cfg.get("theme") in THEMES else "dark"
         self.T = THEMES[self.theme]
         self._pos_applied = False             # restore win_pos only once
-        self.start = dt.date.today()          # always start "today" on launch
+        # The raw text of every entry as it was at last close — restored
+        # verbatim so the form reopens exactly as you left it, even for
+        # values that were never CALCULATEd (or wouldn't validate).
+        form = cfg.get("form")
+        self.saved_form = form if isinstance(form, dict) else {}
+        self._current_tab = (cfg.get("tab")
+                             if cfg.get("tab") in ("graph", "table")
+                             else "graph")
+        self.start = dt.date.today()          # fallback when no saved form
         self.days = int(self._cfg_float(cfg, "days", DEFAULT_DAYS, 1, 1500))
 
         self.rows = []                        # computed / loaded almanac rows
@@ -761,10 +777,17 @@ class Sun2Set:
         panel.pack(side="left", fill="y", padx=(10, 6), pady=10)
         panel.pack_propagate(False)
 
+        def saved(key, fallback):
+            value = self.saved_form.get(key)
+            return value if isinstance(value, str) else fallback
+
         self._section(panel, "LOCATION")
-        self.loc_entry = self._entry_row(panel, "Name", self.location)
-        self.lat_entry = self._entry_row(panel, "Latitude", "%.4f" % self.lat)
-        self.lon_entry = self._entry_row(panel, "Longitude", "%.4f" % self.lon)
+        self.loc_entry = self._entry_row(panel, "Name",
+                                         saved("location", self.location))
+        self.lat_entry = self._entry_row(panel, "Latitude",
+                                         saved("lat", "%.4f" % self.lat))
+        self.lon_entry = self._entry_row(panel, "Longitude",
+                                         saved("lon", "%.4f" % self.lon))
         self._hint(panel, "degrees: + = north / east")
 
         self._section(panel, "TIME ZONE")
@@ -778,7 +801,8 @@ class Sun2Set:
                            activeforeground=T["text"], font=(FONT, 10),
                            anchor="w").pack(fill="x", padx=10)
         self.tz_entry = self._entry_row(panel, "Offset",
-                                        "%g" % self.fixed_hours, width=8)
+                                        saved("offset", "%g" % self.fixed_hours),
+                                        width=8)
         self._hint(panel, "e.g. 10, -3.5 or 9:30")
         self.dst_on_var = tk.BooleanVar(master=root, value=self.dst_enabled)
         self.dst_check = tk.Checkbutton(
@@ -790,18 +814,22 @@ class Sun2Set:
         self.dst_check.pack(fill="x", padx=10)
         self._dst_menus = []
         self.dst_entry = self._entry_row(panel, "DST offs.",
-                                         "%g" % self.dst_hours, width=8)
+                                         saved("dst_offset",
+                                               "%g" % self.dst_hours), width=8)
         self.dst_start_vars = self._rule_row(panel, "starts", self.dst_start)
         self.dst_end_vars = self._rule_row(panel, "ends", self.dst_end)
 
         self._section(panel, "HORIZON")
-        self.horizon_entry = self._entry_row(panel, "Skyline", self.horizon_str)
+        self.horizon_entry = self._entry_row(panel, "Skyline",
+                                             saved("skyline", self.horizon_str))
         self._hint(panel, "deg above true horizon: 0 = flat,")
         self._hint(panel, "5 = hills, or az:alt 60:2, 90:6, 240:8")
 
         self._section(panel, "RANGE")
-        self.date_entry = self._entry_row(panel, "Start", self.start.isoformat())
-        self.days_entry = self._entry_row(panel, "Days", str(self.days))
+        self.date_entry = self._entry_row(panel, "Start",
+                                          saved("start", self.start.isoformat()))
+        self.days_entry = self._entry_row(panel, "Days",
+                                          saved("days", str(self.days)))
 
         RoundButton(panel, "CALCULATE", self._on_calculate, T,
                     width=PANEL_W - 24, height=40, radius=12,
@@ -1106,13 +1134,29 @@ class Sun2Set:
 
     def _on_close(self):
         self.config.update({
-            "win_pos": "+" + self.root.geometry().split("+", 1)[1],
+            "win_pos": _wm_position(self.root.geometry()),
+            # last-validated values (fallbacks if the form snapshot is lost)
             "location": self.location, "lat": self.lat, "lon": self.lon,
-            "tz_mode": self.tz_mode, "fixed_hours": self.fixed_hours,
-            "dst_enabled": self.dst_enabled, "dst_hours": self.dst_hours,
-            "dst_start": list(self.dst_start), "dst_end": list(self.dst_end),
+            "fixed_hours": self.fixed_hours, "dst_hours": self.dst_hours,
             "horizon": self.horizon_str, "days": self.days,
+            # the live widget state, exactly as clicked right now...
+            "tz_mode": self.tz_var.get(),
+            "dst_enabled": bool(self.dst_on_var.get()),
+            "dst_start": list(self._rule_from_vars(self.dst_start_vars)),
+            "dst_end": list(self._rule_from_vars(self.dst_end_vars)),
+            "tab": self._current_tab,
             "theme": self.theme,
+            # ...and every entry exactly as typed, calculated or not
+            "form": {
+                "location": self.loc_entry.get(),
+                "lat": self.lat_entry.get(),
+                "lon": self.lon_entry.get(),
+                "offset": self.tz_entry.get(),
+                "dst_offset": self.dst_entry.get(),
+                "skyline": self.horizon_entry.get(),
+                "start": self.date_entry.get(),
+                "days": self.days_entry.get(),
+            },
         })
         if self.persist:
             save_config(self.config)
@@ -1429,7 +1473,15 @@ def selftest():
             pass
     print("  offset parser OK")
 
-    # 10. Headless app instance: compute + save/load round-trip, no Tk, no
+    # 10. Window-position parsing (negative coords = monitor left of/above
+    #     the primary; a naive split('+') mangles them).
+    assert _wm_position("1180x762+208+208") == "+208+208"
+    assert _wm_position("800x600-1200+30") == "-1200+30"
+    assert _wm_position("800x600+30-1200") == "+30-1200"
+    assert _wm_position("garbage") == "+100+100"
+    print("  window-position parsing OK")
+
+    # 11. Headless app instance: compute + save/load round-trip, no Tk, no
     #     real config/autosave files (persist=False).
     import tempfile
     app = Sun2Set(root=None, persist=False)

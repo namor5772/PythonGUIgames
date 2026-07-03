@@ -249,12 +249,13 @@ date).
   dark house style and a light theme, keeping everything you've typed; the
   choice persists in `config.json`.
 
-Window position and the last-used parameters persist in
-`%APPDATA%\Sun2Set\config.json`, and `--selftest` checks the solar math
-against reference almanac times, polar cases, the manual-DST rule engine
-(including that it reproduces the system zone exactly), the skyline model
-(delays, profiles, ridge-blocked days), table round-trips and save/load —
-all headlessly.
+The whole session persists in `%APPDATA%\Sun2Set\config.json`: the window
+position, theme, active tab and **every input field exactly as typed** —
+even edits you never calculated — so the app reopens just as you left it.
+`--selftest` checks the solar math against reference almanac times, polar
+cases, the manual-DST rule engine (including that it reproduces the system
+zone exactly), the skyline model (delays, profiles, ridge-blocked days),
+window-position parsing, table round-trips and save/load — all headlessly.
 
 ## Desktop shortcuts
 
