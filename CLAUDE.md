@@ -111,6 +111,15 @@ never touch Tk (tk Vars are created only inside `_build_gui`).
   contiguous run). Never plot `None` as 0.
 - **Gotcha:** `Canvas.tkraise()` raises canvas *items*, not the widget — the
   GRAPH/TABLE tab switcher raises wrapper Frames instead.
+- **Theming:** every GUI color comes from `THEMES[self.theme]` via `self.T`
+  — no color literals in widget/graph code (the graph aliases it as `th`
+  because `T` is the plot's top margin there). The THEME toggle rebuilds the
+  GUI (destroy root children → `_build_gui`) while preserving raw form
+  state; `_pos_applied` stops the rebuild re-applying the saved window
+  position. Buttons are `RoundButton` canvases (smoothed-polygon rounded
+  rects, same trick as MyPocketTanks); the DST rule dropdowns are
+  `RoundMenuButton`s that pop a `tk.Menu` — plain tk widgets can't round
+  their corners.
 - **Persistence:** `%APPDATA%\Sun2Set\config.json` (window pos + last params)
   and an autosave of the latest table to `%APPDATA%\Sun2Set\sun2set_latest.txt`
   on every Calculate — both gated by the `persist` flag like the games.

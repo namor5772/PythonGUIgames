@@ -24,6 +24,7 @@ Features:
   * Graph of sunrise, sunset and day length across the whole span, with a
     hover crosshair that reads out exact values per day
   * Save the table anywhere / Load a previously saved table to re-display it
+  * Rounded buttons and a dark / light theme toggle (choice persists)
   * Every calculation is also autosaved to %APPDATA%\\Sun2Set\\sun2set_latest.txt
   * Config persistence (window position + last-used parameters)
     in %APPDATA%\\Sun2Set
@@ -41,29 +42,37 @@ import tkinter as tk
 from tkinter import filedialog
 
 # ----------------------------------------------------------------------------
-# Look & feel (same palette / font family as the other apps in this repo)
+# Look & feel. Every color the GUI uses lives in one of two selectable
+# themes (the choice persists in config.json); the dark palette matches the
+# other apps in this repo. FONT is the house font.
 # ----------------------------------------------------------------------------
-BG = "#0b0b12"
-TEXT = "#e6e6ec"
-SUBTEXT = "#9a9ab0"
-GOLD = "#ffd91a"
-PANEL_BG = "#12121c"
-PANEL_EDGE = "#2a2a3a"
-BTN_BG = "#1d1d2c"
-BTN_EDGE = "#3a3a52"
-ERR_COLOR = "#ff6a6a"
-OK_COLOR = "#2ecc55"
 FONT = "Consolas"
+
+THEMES = {
+    "dark": dict(
+        bg="#0b0b12", panel="#12121c", edge="#2a2a3a",
+        btn="#1d1d2c", btn_edge="#3a3a52", btn_hover="#2a2a3e",
+        text="#e6e6ec", sub="#9a9ab0", accent="#ffd91a",
+        primary="#ffd91a", primary_fg="#101018", primary_hover="#ffe763",
+        disabled="#565670", err="#ff6a6a", ok="#2ecc55",
+        band="#26210f", grid="#20263a", axis="#3a3a52",
+        rise="#ffd91a", set="#ff6a3d", day="#2ecc55",
+        hover="#4a5068", readout="#161622",
+    ),
+    "light": dict(
+        bg="#e9ecf2", panel="#f7f8fb", edge="#c3c8d6",
+        btn="#e0e4ee", btn_edge="#b2b9cc", btn_hover="#d2d7e5",
+        text="#20222e", sub="#5b6072", accent="#9a6a00",
+        primary="#ffd91a", primary_fg="#101018", primary_hover="#ffe763",
+        disabled="#a3a8b8", err="#c62828", ok="#177a3e",
+        band="#efe5bd", grid="#d7dae5", axis="#9aa0b4",
+        rise="#d99a00", set="#e05320", day="#159048",
+        hover="#8a90a8", readout="#ffffff",
+    ),
+}
 
 GRAPH_W, GRAPH_H = 840, 700   # plot canvas size
 PANEL_W = 312                 # parameter panel width
-
-C_RISE = "#ffd91a"            # sunrise curve
-C_SET = "#ff6a3d"             # sunset curve
-C_DAY = "#2ecc55"             # day-length curve
-C_BAND = "#26210f"            # shaded daylight band between the curves
-C_GRID = "#20263a"
-C_AXIS = "#3a3a52"
 
 DEFAULT_LOCATION = "Sydney, Australia"
 DEFAULT_LAT, DEFAULT_LON = -33.8688, 151.2093
@@ -522,6 +531,98 @@ def save_config(config):
 
 
 # ----------------------------------------------------------------------------
+# Rounded-corner widgets. Tk buttons can't round their edges, so these are
+# small Canvases drawing the classic smoothed polygon — the doubled corner
+# points pin the straight edges while smooth=True bends quadratic curves
+# around each corner (same trick as MyPocketTanks' panel buttons).
+# ----------------------------------------------------------------------------
+class RoundButton(tk.Canvas):
+    def __init__(self, parent, text, command, theme, width=130, height=34,
+                 radius=11, font=None, primary=False, bg=None):
+        super().__init__(parent, width=width, height=height,
+                         bg=bg or theme["panel"], highlightthickness=0, bd=0,
+                         cursor="hand2")
+        self.T = theme
+        self.command = command
+        self.btn_text = text
+        self.btn_font = font or (FONT, 11, "bold")
+        self.w, self.h, self.r = width, height, radius
+        self.fill = theme["primary"] if primary else theme["btn"]
+        self.hover_fill = (theme["primary_hover"] if primary
+                           else theme["btn_hover"])
+        self.fg = theme["primary_fg"] if primary else theme["text"]
+        self.state = "normal"
+        self._hover = False
+        self._redraw()
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Enter>", lambda e: self._set_hover(True))
+        self.bind("<Leave>", lambda e: self._set_hover(False))
+
+    def _redraw(self):
+        self.delete("all")
+        x0, y0, x1, y1 = 1, 1, self.w - 2, self.h - 2
+        r = min(self.r, (x1 - x0) / 2, (y1 - y0) / 2)
+        pts = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r,
+               x1, y1 - r, x1, y1, x1 - r, y1, x0 + r, y1,
+               x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
+        hovering = self._hover and self.state == "normal"
+        self.create_polygon(pts, smooth=True,
+                            fill=self.hover_fill if hovering else self.fill,
+                            outline=self.T["btn_edge"])
+        self.create_text(self.w // 2, self.h // 2, text=self.btn_text,
+                         fill=self.fg if self.state == "normal"
+                         else self.T["disabled"],
+                         font=self.btn_font)
+
+    def _set_hover(self, on):
+        self._hover = on
+        self._redraw()
+
+    def _on_click(self, _event):
+        if self.state == "normal" and self.command:
+            self.command()
+
+    def set_state(self, state):
+        self.state = state
+        self.configure(cursor="hand2" if state == "normal" else "arrow")
+        self._redraw()
+
+    def set_text(self, text):
+        self.btn_text = text
+        self._redraw()
+
+    def restyle(self, fill=None, fg=None):
+        if fill:
+            self.fill = fill
+        if fg:
+            self.fg = fg
+        self._redraw()
+
+
+class RoundMenuButton(RoundButton):
+    """A rounded drop-down: shows its StringVar's value; click pops a menu."""
+
+    def __init__(self, parent, var, values, theme, **kw):
+        self.var = var
+        super().__init__(parent, var.get(), self._post, theme, **kw)
+        self.menu = tk.Menu(self, tearoff=0, bg=theme["btn"],
+                            fg=theme["text"], font=(FONT, 9),
+                            activebackground=theme["btn_hover"],
+                            activeforeground=theme["text"])
+        for value in values:
+            self.menu.add_command(label=value,
+                                  command=lambda v=value: self.var.set(v))
+        var.trace_add("write", lambda *_: self.set_text(self.var.get()))
+
+    def _post(self):
+        try:
+            self.menu.tk_popup(self.winfo_rootx(),
+                               self.winfo_rooty() + self.h)
+        finally:
+            self.menu.grab_release()
+
+
+# ----------------------------------------------------------------------------
 # The app. Sun2Set(root=None) is fully headless: parameters are plain
 # attributes, compute()/save/load never touch Tk — that's what --selftest uses.
 # ----------------------------------------------------------------------------
@@ -546,6 +647,9 @@ class Sun2Set:
             parse_horizon(self.horizon_str)
         except ValueError:
             self.horizon_str = "0"
+        self.theme = cfg.get("theme") if cfg.get("theme") in THEMES else "dark"
+        self.T = THEMES[self.theme]
+        self._pos_applied = False             # restore win_pos only once
         self.start = dt.date.today()          # always start "today" on launch
         self.days = int(self._cfg_float(cfg, "days", DEFAULT_DAYS, 1, 1500))
 
@@ -647,46 +751,42 @@ class Sun2Set:
     # ------------------------------------------------------------------ GUI
     def _build_gui(self):
         root = self.root
+        T = self.T
         root.title("Sun2Set — sunrise & sunset almanac")
-        root.configure(bg=BG)
+        root.configure(bg=T["bg"])
         root.resizable(False, False)
 
-        panel = tk.Frame(root, bg=PANEL_BG, width=PANEL_W,
-                         highlightbackground=PANEL_EDGE, highlightthickness=1)
+        panel = tk.Frame(root, bg=T["panel"], width=PANEL_W,
+                         highlightbackground=T["edge"], highlightthickness=1)
         panel.pack(side="left", fill="y", padx=(10, 6), pady=10)
         panel.pack_propagate(False)
-
-        tk.Label(panel, text="Sun2Set", bg=PANEL_BG, fg=GOLD,
-                 font=(FONT, 18, "bold")).pack(anchor="w", padx=12, pady=(12, 0))
-        tk.Label(panel, text="sunrise · sunset · day length", bg=PANEL_BG,
-                 fg=SUBTEXT, font=(FONT, 9)).pack(anchor="w", padx=12)
 
         self._section(panel, "LOCATION")
         self.loc_entry = self._entry_row(panel, "Name", self.location)
         self.lat_entry = self._entry_row(panel, "Latitude", "%.4f" % self.lat)
         self.lon_entry = self._entry_row(panel, "Longitude", "%.4f" % self.lon)
-        tk.Label(panel, text="degrees: + = north / east", bg=PANEL_BG,
-                 fg=SUBTEXT, font=(FONT, 8)).pack(anchor="w", padx=12)
+        self._hint(panel, "degrees: + = north / east")
 
         self._section(panel, "TIME ZONE")
         self.tz_var = tk.StringVar(master=root, value=self.tz_mode)
         for value, label in (("system", "System zone (DST aware)"),
                              ("fixed", "Fixed UTC offset (hours):")):
             tk.Radiobutton(panel, text=label, value=value, variable=self.tz_var,
-                           command=self._on_tz_mode, bg=PANEL_BG, fg=TEXT,
-                           selectcolor=BTN_BG, activebackground=PANEL_BG,
-                           activeforeground=TEXT, font=(FONT, 10),
+                           command=self._on_tz_mode, bg=T["panel"],
+                           fg=T["text"], selectcolor=T["btn"],
+                           activebackground=T["panel"],
+                           activeforeground=T["text"], font=(FONT, 10),
                            anchor="w").pack(fill="x", padx=10)
         self.tz_entry = self._entry_row(panel, "Offset",
                                         "%g" % self.fixed_hours, width=8)
-        tk.Label(panel, text="e.g. 10, -3.5 or 9:30", bg=PANEL_BG,
-                 fg=SUBTEXT, font=(FONT, 8)).pack(anchor="w", padx=12)
+        self._hint(panel, "e.g. 10, -3.5 or 9:30")
         self.dst_on_var = tk.BooleanVar(master=root, value=self.dst_enabled)
         self.dst_check = tk.Checkbutton(
             panel, text="with daylight saving:", variable=self.dst_on_var,
-            command=self._on_tz_mode, bg=PANEL_BG, fg=TEXT, selectcolor=BTN_BG,
-            activebackground=PANEL_BG, activeforeground=TEXT, font=(FONT, 10),
-            anchor="w", disabledforeground="#565670")
+            command=self._on_tz_mode, bg=T["panel"], fg=T["text"],
+            selectcolor=T["btn"], activebackground=T["panel"],
+            activeforeground=T["text"], font=(FONT, 10),
+            anchor="w", disabledforeground=T["disabled"])
         self.dst_check.pack(fill="x", padx=10)
         self._dst_menus = []
         self.dst_entry = self._entry_row(panel, "DST offs.",
@@ -696,43 +796,47 @@ class Sun2Set:
 
         self._section(panel, "HORIZON")
         self.horizon_entry = self._entry_row(panel, "Skyline", self.horizon_str)
-        tk.Label(panel, text="deg above true horizon: 0 = flat,", bg=PANEL_BG,
-                 fg=SUBTEXT, font=(FONT, 8)).pack(anchor="w", padx=12)
-        tk.Label(panel, text="5 = hills, or az:alt 60:2, 90:6, 240:8",
-                 bg=PANEL_BG, fg=SUBTEXT, font=(FONT, 8)).pack(anchor="w",
-                                                               padx=12)
+        self._hint(panel, "deg above true horizon: 0 = flat,")
+        self._hint(panel, "5 = hills, or az:alt 60:2, 90:6, 240:8")
 
         self._section(panel, "RANGE")
         self.date_entry = self._entry_row(panel, "Start", self.start.isoformat())
         self.days_entry = self._entry_row(panel, "Days", str(self.days))
 
-        self._button(panel, "CALCULATE", self._on_calculate,
-                     primary=True).pack(fill="x", padx=12, pady=(18, 4))
-        row = tk.Frame(panel, bg=PANEL_BG)
-        row.pack(fill="x", padx=12, pady=2)
-        self._button(row, "SAVE AS…", self._on_save).pack(
-            side="left", expand=True, fill="x", padx=(0, 3))
-        self._button(row, "LOAD…", self._on_load).pack(
-            side="left", expand=True, fill="x", padx=(3, 0))
+        RoundButton(panel, "CALCULATE", self._on_calculate, T,
+                    width=PANEL_W - 24, height=40, radius=12,
+                    primary=True).pack(padx=12, pady=(16, 4))
+        row = tk.Frame(panel, bg=T["panel"])
+        row.pack(padx=12, pady=2)
+        half = (PANEL_W - 24 - 6) // 2
+        RoundButton(row, "SAVE AS…", self._on_save, T,
+                    width=half, height=34).pack(side="left", padx=(0, 6))
+        RoundButton(row, "LOAD…", self._on_load, T,
+                    width=half, height=34).pack(side="left")
 
-        self.status = tk.Label(panel, text="", bg=PANEL_BG, fg=SUBTEXT,
+        self.status = tk.Label(panel, text="", bg=T["panel"], fg=T["sub"],
                                font=(FONT, 9), wraplength=PANEL_W - 28,
                                justify="left", anchor="nw")
         self.status.pack(fill="both", expand=True, padx=12, pady=(10, 12))
 
-        right = tk.Frame(root, bg=BG)
+        right = tk.Frame(root, bg=T["bg"])
         right.pack(side="left", fill="both", padx=(0, 10), pady=10)
-        tabs = tk.Frame(right, bg=BG)
+        tabs = tk.Frame(right, bg=T["bg"])
         tabs.pack(fill="x")
         self.tab_btns = {}
         for key, label in (("graph", "GRAPH"), ("table", "TABLE")):
-            b = self._button(tabs, label, lambda k=key: self._show_tab(k))
-            b.pack(side="left", padx=(0, 6), pady=(0, 6), ipadx=14)
+            b = RoundButton(tabs, label, lambda k=key: self._show_tab(k), T,
+                            width=110, height=32, bg=T["bg"])
+            b.pack(side="left", padx=(0, 6), pady=(0, 6))
             self.tab_btns[key] = b
-        tk.Label(tabs, text="hover the graph for exact values", bg=BG,
-                 fg=SUBTEXT, font=(FONT, 9)).pack(side="right")
+        RoundButton(tabs, "THEME: %s" % self.theme.upper(), self._on_theme,
+                    T, width=150, height=32, bg=T["bg"],
+                    font=(FONT, 10, "bold")).pack(side="right", pady=(0, 6))
+        tk.Label(tabs, text="hover the graph for exact values", bg=T["bg"],
+                 fg=T["sub"], font=(FONT, 9)).pack(side="right", padx=(0, 12))
 
-        container = tk.Frame(right, bg=BG, width=GRAPH_W + 2, height=GRAPH_H + 2)
+        container = tk.Frame(right, bg=T["bg"],
+                             width=GRAPH_W + 2, height=GRAPH_H + 2)
         container.pack()
         container.grid_propagate(False)
         container.rowconfigure(0, weight=1)
@@ -740,20 +844,20 @@ class Sun2Set:
 
         # The canvas lives in its own frame: Canvas.tkraise() raises canvas
         # *items*, not the widget, so tab switching must raise plain Frames.
-        graph_frame = tk.Frame(container, bg=BG)
+        graph_frame = tk.Frame(container, bg=T["bg"])
         graph_frame.grid(row=0, column=0, sticky="nsew")
         self.canvas = tk.Canvas(graph_frame, width=GRAPH_W, height=GRAPH_H,
-                                bg=BG, highlightthickness=1,
-                                highlightbackground=PANEL_EDGE)
+                                bg=T["bg"], highlightthickness=1,
+                                highlightbackground=T["edge"])
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Motion>", self._on_graph_motion)
         self.canvas.bind("<Leave>", lambda e: self.canvas.delete("hover"))
 
-        table_frame = tk.Frame(container, bg=BG)
+        table_frame = tk.Frame(container, bg=T["bg"])
         table_frame.grid(row=0, column=0, sticky="nsew")
         scroll = tk.Scrollbar(table_frame)
         scroll.pack(side="right", fill="y")
-        self.table_widget = tk.Text(table_frame, bg=PANEL_BG, fg=TEXT,
+        self.table_widget = tk.Text(table_frame, bg=T["panel"], fg=T["text"],
                                     font=(FONT, 10), relief="flat",
                                     state="disabled", wrap="none",
                                     yscrollcommand=scroll.set)
@@ -761,70 +865,61 @@ class Sun2Set:
         scroll.configure(command=self.table_widget.yview)
         self._tab_frames = {"graph": graph_frame, "table": table_frame}
 
-        self._show_tab("graph")
+        self._show_tab(getattr(self, "_current_tab", "graph"))
         self._on_tz_mode()
         root.bind("<Return>", lambda e: self._on_calculate())
 
-        pos = self.config.get("win_pos")
-        if isinstance(pos, str) and pos.startswith(("+", "-")):
-            try:
-                root.geometry(pos)
-            except tk.TclError:
-                pass
+        if not self._pos_applied:             # skip on theme rebuilds
+            self._pos_applied = True
+            pos = self.config.get("win_pos")
+            if isinstance(pos, str) and pos.startswith(("+", "-")):
+                try:
+                    root.geometry(pos)
+                except tk.TclError:
+                    pass
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _section(self, parent, text):
-        tk.Label(parent, text=text, bg=PANEL_BG, fg=GOLD,
+        tk.Label(parent, text=text, bg=self.T["panel"], fg=self.T["accent"],
                  font=(FONT, 10, "bold"), anchor="w").pack(
             fill="x", padx=12, pady=(10, 2))
 
+    def _hint(self, parent, text):
+        tk.Label(parent, text=text, bg=self.T["panel"], fg=self.T["sub"],
+                 font=(FONT, 8)).pack(anchor="w", padx=12)
+
     def _entry_row(self, parent, label, initial, width=16):
-        row = tk.Frame(parent, bg=PANEL_BG)
+        T = self.T
+        row = tk.Frame(parent, bg=T["panel"])
         row.pack(fill="x", padx=12, pady=2)
-        tk.Label(row, text=label, bg=PANEL_BG, fg=TEXT, font=(FONT, 10),
+        tk.Label(row, text=label, bg=T["panel"], fg=T["text"], font=(FONT, 10),
                  width=9, anchor="w").pack(side="left")
-        e = tk.Entry(row, bg=BTN_BG, fg=TEXT, insertbackground=TEXT,
-                     relief="flat", highlightthickness=1,
-                     highlightbackground=BTN_EDGE, highlightcolor=GOLD,
-                     font=(FONT, 10), width=width,
-                     disabledbackground=PANEL_BG)
+        e = tk.Entry(row, bg=T["btn"], fg=T["text"],
+                     insertbackground=T["text"], relief="flat",
+                     highlightthickness=1, highlightbackground=T["btn_edge"],
+                     highlightcolor=T["accent"], font=(FONT, 10), width=width,
+                     disabledbackground=T["panel"],
+                     disabledforeground=T["disabled"])
         e.insert(0, initial)
         e.pack(side="left", fill="x", expand=True)
         return e
 
-    def _button(self, parent, text, cmd, primary=False):
-        return tk.Button(
-            parent, text=text, command=cmd, font=(FONT, 11, "bold"),
-            bg=GOLD if primary else BTN_BG,
-            fg="#101018" if primary else TEXT,
-            activebackground="#ffe763" if primary else "#2a2a3e",
-            activeforeground="#101018" if primary else TEXT,
-            relief="flat", bd=0, highlightthickness=1,
-            highlightbackground=BTN_EDGE, cursor="hand2", pady=6)
-
     def _rule_row(self, parent, label, rule):
         """A '1st / Sun / Oct' dropdown triple; returns its three StringVars."""
-        row = tk.Frame(parent, bg=PANEL_BG)
-        row.pack(fill="x", padx=12, pady=1)
-        tk.Label(row, text=label, bg=PANEL_BG, fg=TEXT, font=(FONT, 10),
+        T = self.T
+        row = tk.Frame(parent, bg=T["panel"])
+        row.pack(fill="x", padx=12, pady=2)
+        tk.Label(row, text=label, bg=T["panel"], fg=T["text"], font=(FONT, 10),
                  width=9, anchor="w").pack(side="left")
         out = []
         for values, initial in ((list(ORD_NAMES.values()), ORD_NAMES[rule[0]]),
                                 (DAY_NAMES, DAY_NAMES[rule[1]]),
                                 (MONTH_NAMES, MONTH_NAMES[rule[2] - 1])):
             var = tk.StringVar(master=self.root, value=initial)
-            om = tk.OptionMenu(row, var, *values)
-            om.configure(bg=BTN_BG, fg=TEXT, activebackground="#2a2a3e",
-                         activeforeground=TEXT, relief="flat", bd=0,
-                         highlightthickness=1, highlightbackground=BTN_EDGE,
-                         font=(FONT, 9), width=4, anchor="w",
-                         indicatoron=False, disabledforeground="#565670",
-                         cursor="hand2")
-            om["menu"].configure(bg=BTN_BG, fg=TEXT, font=(FONT, 9),
-                                 activebackground="#2a2a3e",
-                                 activeforeground=TEXT)
-            om.pack(side="left", padx=(0, 3))
-            self._dst_menus.append(om)
+            mb = RoundMenuButton(row, var, values, T, width=52, height=26,
+                                 radius=9, font=(FONT, 9))
+            mb.pack(side="left", padx=(0, 4))
+            self._dst_menus.append(mb)
             out.append(var)
         return out
 
@@ -834,10 +929,13 @@ class Sun2Set:
         return (ORD_VALUE[o], DAY_NAMES.index(d), MONTH_NAMES.index(m) + 1)
 
     def _show_tab(self, key):
+        self._current_tab = key
         self._tab_frames[key].tkraise()
         for k, b in self.tab_btns.items():
-            b.configure(bg="#2a2a3e" if k == key else BTN_BG,
-                        fg=GOLD if k == key else SUBTEXT)
+            if k == key:
+                b.restyle(fill=self.T["btn_hover"], fg=self.T["accent"])
+            else:
+                b.restyle(fill=self.T["btn"], fg=self.T["sub"])
 
     def _on_tz_mode(self):
         fixed = self.tz_var.get() == "fixed"
@@ -845,11 +943,49 @@ class Sun2Set:
         self.dst_check.configure(state="normal" if fixed else "disabled")
         dst_on = fixed and self.dst_on_var.get()
         self.dst_entry.configure(state="normal" if dst_on else "disabled")
-        for om in self._dst_menus:
-            om.configure(state="normal" if dst_on else "disabled")
+        for mb in self._dst_menus:
+            mb.set_state("normal" if dst_on else "disabled")
 
-    def _set_status(self, text, color=SUBTEXT):
-        self.status.configure(text=text, fg=color)
+    def _on_theme(self):
+        """Flip dark <-> light: rebuild the GUI, preserving all form state."""
+        entries = ("loc_entry", "lat_entry", "lon_entry", "tz_entry",
+                   "dst_entry", "horizon_entry", "date_entry", "days_entry")
+        raw = [getattr(self, name).get() for name in entries]
+        tz_mode, dst_on = self.tz_var.get(), self.dst_on_var.get()
+        rules = ([v.get() for v in self.dst_start_vars],
+                 [v.get() for v in self.dst_end_vars])
+        status = self.status.cget("text")
+
+        self.theme = "light" if self.theme == "dark" else "dark"
+        self.T = THEMES[self.theme]
+        self.config["theme"] = self.theme
+        if self.persist:
+            save_config(self.config)          # survive a non-close exit too
+
+        for widget in self.root.winfo_children():
+            widget.destroy()
+        self._build_gui()
+        for name, text in zip(entries, raw):
+            entry = getattr(self, name)
+            state = entry.cget("state")
+            entry.configure(state="normal")
+            entry.delete(0, "end")
+            entry.insert(0, text)
+            entry.configure(state=state)
+        self.tz_var.set(tz_mode)
+        self.dst_on_var.set(dst_on)
+        for vars_, saved in zip((self.dst_start_vars, self.dst_end_vars),
+                                rules):
+            for var, value in zip(vars_, saved):
+                var.set(value)
+        self._on_tz_mode()
+        self._refresh_views()
+        fg = (self.T["ok"] if status.startswith("✓")
+              else self.T["err"] if status.startswith("✗") else None)
+        self._set_status(status, fg)
+
+    def _set_status(self, text, color=None):
+        self.status.configure(text=text, fg=color or self.T["sub"])
 
     # ------------------------------------------------------- button actions
     def _read_form(self):
@@ -910,7 +1046,7 @@ class Sun2Set:
     def _on_calculate(self):
         err = self._read_form()
         if err:
-            self._set_status("✗ " + err, ERR_COLOR)
+            self._set_status("✗ " + err, self.T["err"])
             return
         self.compute()
         self._refresh_views()
@@ -922,11 +1058,12 @@ class Sun2Set:
                 msg += "\n\nAutosaved to:\n%s" % path
         except OSError as e:
             msg += "\n\n(autosave failed: %s)" % e
-        self._set_status(msg, OK_COLOR)
+        self._set_status(msg, self.T["ok"])
 
     def _on_save(self):
         if not self.rows:
-            self._set_status("✗ Nothing to save — CALCULATE first.", ERR_COLOR)
+            self._set_status("✗ Nothing to save — CALCULATE first.",
+                             self.T["err"])
             return
         slug = "".join(c if c.isalnum() else "-" for c in self.location).strip("-")
         initial = "Sun2Set_%s_%s.txt" % (slug or "data",
@@ -940,9 +1077,9 @@ class Sun2Set:
         try:
             self.save_text_file(path)
             self._set_status("✓ Saved %d days to:\n%s" % (len(self.rows), path),
-                             OK_COLOR)
+                             self.T["ok"])
         except OSError as e:
-            self._set_status("✗ Save failed: %s" % e, ERR_COLOR)
+            self._set_status("✗ Save failed: %s" % e, self.T["err"])
 
     def _on_load(self):
         path = filedialog.askopenfilename(
@@ -953,7 +1090,7 @@ class Sun2Set:
         try:
             n = self.load_text_file(path)
         except (OSError, ValueError) as e:
-            self._set_status("✗ Load failed: %s" % e, ERR_COLOR)
+            self._set_status("✗ Load failed: %s" % e, self.T["err"])
             return
         # reflect the loaded assumptions back into the form
         for entry, value in ((self.loc_entry, self.location),
@@ -964,7 +1101,8 @@ class Sun2Set:
             entry.delete(0, "end")
             entry.insert(0, str(value))
         self._refresh_views()
-        self._set_status("✓ Loaded %d days from:\n%s" % (n, path), OK_COLOR)
+        self._set_status("✓ Loaded %d days from:\n%s" % (n, path),
+                         self.T["ok"])
 
     def _on_close(self):
         self.config.update({
@@ -974,6 +1112,7 @@ class Sun2Set:
             "dst_enabled": self.dst_enabled, "dst_hours": self.dst_hours,
             "dst_start": list(self.dst_start), "dst_end": list(self.dst_end),
             "horizon": self.horizon_str, "days": self.days,
+            "theme": self.theme,
         })
         if self.persist:
             save_config(self.config)
@@ -989,11 +1128,13 @@ class Sun2Set:
     # ------------------------------------------------------------ the graph
     def _draw_graph(self):
         c = self.canvas
+        th = self.T                           # theme (T is the top margin)
+        c.configure(bg=th["bg"])
         c.delete("all")
         self._plot = None
         rows = self.rows
         if not rows:
-            c.create_text(GRAPH_W // 2, GRAPH_H // 2, fill=SUBTEXT,
+            c.create_text(GRAPH_W // 2, GRAPH_H // 2, fill=th["sub"],
                           font=(FONT, 12), text="No data — press CALCULATE")
             return
 
@@ -1020,25 +1161,25 @@ class Sun2Set:
                     pts = [(X(i2), Y(clock_h(rows[i2]["rise"]))) for i2 in run]
                     pts += [(X(i2), Y(clock_h(rows[i2]["set"])))
                             for i2 in reversed(run)]
-                    c.create_polygon(pts, fill=C_BAND, outline="")
+                    c.create_polygon(pts, fill=th["band"], outline="")
                 run = []
 
         # Grid: hours (every 2 h) and month boundaries.
         for h in range(0, 25, 2):
             y = Y(h)
-            c.create_line(L, y, GRAPH_W - R, y, fill=C_GRID)
-            c.create_text(L - 8, y, anchor="e", fill=SUBTEXT,
+            c.create_line(L, y, GRAPH_W - R, y, fill=th["grid"])
+            c.create_text(L - 8, y, anchor="e", fill=th["sub"],
                           font=(FONT, 8), text="%02d:00" % h)
         for i, r in enumerate(rows):
             if r["date"].day == 1 and n > 27:
                 x = X(i)
-                c.create_line(x, T, x, T + ph, fill=C_GRID)
+                c.create_line(x, T, x, T + ph, fill=th["grid"])
                 label = r["date"].strftime("%b")
                 if r["date"].month == 1:
                     label += "\n" + str(r["date"].year)
-                c.create_text(x, T + ph + 6, anchor="n", fill=SUBTEXT,
+                c.create_text(x, T + ph + 6, anchor="n", fill=th["sub"],
                               font=(FONT, 8), text=label, justify="center")
-        c.create_rectangle(L, T, GRAPH_W - R, T + ph, outline=C_AXIS)
+        c.create_rectangle(L, T, GRAPH_W - R, T + ph, outline=th["axis"])
 
         # Curves, split wherever a value is missing (polar days).
         def curve(getter, color):
@@ -1055,33 +1196,37 @@ class Sun2Set:
                 else:
                     seg += [X(i), Y(v)]
 
-        curve(lambda r: None if r["rise"] is None else clock_h(r["rise"]), C_RISE)
-        curve(lambda r: None if r["set"] is None else clock_h(r["set"]), C_SET)
-        curve(lambda r: None if r["day"] is None else r["day"] / 3600.0, C_DAY)
+        curve(lambda r: None if r["rise"] is None else clock_h(r["rise"]),
+              th["rise"])
+        curve(lambda r: None if r["set"] is None else clock_h(r["set"]),
+              th["set"])
+        curve(lambda r: None if r["day"] is None else r["day"] / 3600.0,
+              th["day"])
 
         # Title + legend.
         title = self.meta.get("location") or ""
         lat, lon = self.meta.get("lat"), self.meta.get("lon")
         if lat is not None and lon is not None:
             title += "  (%+.4f°, %+.4f°)" % (lat, lon)
-        c.create_text(L, 14, anchor="w", fill=TEXT, font=(FONT, 13, "bold"),
+        c.create_text(L, 14, anchor="w", fill=th["text"],
+                      font=(FONT, 13, "bold"),
                       text=title.strip() or "Sun almanac")
         tz_short = self.meta.get("tz_desc", "").split(";")[0]
         sub = "%s → %s   ·   %s" % (rows[0]["date"].isoformat(),
                                     rows[-1]["date"].isoformat(), tz_short)
-        c.create_text(L, 34, anchor="w", fill=SUBTEXT, font=(FONT, 8),
+        c.create_text(L, 34, anchor="w", fill=th["sub"], font=(FONT, 8),
                       text=sub)
         hz = self.meta.get("horizon_desc", "")
         if hz and not hz.startswith("flat"):
             short = hz.split(" above")[0].split(" (")[0]
             if len(short) > 60:
                 short = short[:57] + "..."
-            c.create_text(L, 49, anchor="w", fill=SUBTEXT, font=(FONT, 8),
+            c.create_text(L, 49, anchor="w", fill=th["sub"], font=(FONT, 8),
                           text="skyline: %s" % short)
         lx = GRAPH_W - R
-        for label, color in (("day length", C_DAY), ("sunset", C_SET),
-                             ("sunrise", C_RISE)):
-            t = c.create_text(lx, 52, anchor="e", fill=SUBTEXT,
+        for label, color in (("day length", th["day"]), ("sunset", th["set"]),
+                             ("sunrise", th["rise"])):
+            t = c.create_text(lx, 52, anchor="e", fill=th["sub"],
                               font=(FONT, 9), text=label)
             x0 = c.bbox(t)[0]
             c.create_line(x0 - 24, 52, x0 - 6, 52, fill=color, width=3)
@@ -1100,17 +1245,19 @@ class Sun2Set:
         if not (0 <= i < n and p["L"] - 6 <= ev.x <= p["L"] + p["pw"] + 6):
             return
         r = self.rows[i]
+        th = self.T
         x = p["L"] + p["pw"] * i / max(1, n - 1)
-        c.create_line(x, p["T"], x, p["T"] + p["ph"], fill="#4a5068",
+        c.create_line(x, p["T"], x, p["T"] + p["ph"], fill=th["hover"],
                       dash=(2, 3), tags="hover")
         txt = "%s   rise %s   set %s   day %s   UTC%s" % (
             r["date"].isoformat(), fmt_clock(r["rise"]), fmt_clock(r["set"]),
             fmt_span(r["day"]), fmt_offset(r["off"]))
-        tid = c.create_text(p["L"] + 10, p["T"] + 10, anchor="nw", fill=TEXT,
-                            font=(FONT, 10), text=txt, tags="hover")
+        tid = c.create_text(p["L"] + 10, p["T"] + 10, anchor="nw",
+                            fill=th["text"], font=(FONT, 10), text=txt,
+                            tags="hover")
         x0, y0, x1, y1 = c.bbox(tid)
         rect = c.create_rectangle(x0 - 6, y0 - 4, x1 + 6, y1 + 4,
-                                  fill="#161622", outline=PANEL_EDGE,
+                                  fill=th["readout"], outline=th["edge"],
                                   tags="hover")
         c.tag_lower(rect, tid)
 

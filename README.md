@@ -244,6 +244,10 @@ date).
   **LOAD…** a saved file later to re-display its graph. Every calculation is
   also autosaved to `%APPDATA%\Sun2Set\sun2set_latest.txt` (macOS/Linux:
   `~/Sun2Set/`).
+- **Rounded controls, two looks** — every button is a rounded-corner widget
+  (same style as MyPocketTanks), and a **THEME** toggle flips between the
+  dark house style and a light theme, keeping everything you've typed; the
+  choice persists in `config.json`.
 
 Window position and the last-used parameters persist in
 `%APPDATA%\Sun2Set\config.json`, and `--selftest` checks the solar math
