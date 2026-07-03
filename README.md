@@ -244,7 +244,10 @@ by default; 1–1500 settable, any start date).
 - **Text table** — the same data as a commented text file whose header states
   every assumption (location, latitude, longitude, time-zone handling,
   algorithm, units); view it on the **TABLE** tab, **SAVE AS…** anywhere, and
-  **LOAD…** a saved file later to re-display its graph. Every calculation is
+  **LOAD…** a saved file later to re-display its graph. Loading also
+  **restores every assumption from the header** — coordinates, time-zone /
+  DST settings, skyline and range go back into the form — so a saved file
+  regenerates itself with one CALCULATE on any machine. Every calculation is
   also autosaved to `%APPDATA%\Sun2Set\sun2set_latest.txt` (macOS/Linux:
   `~/Sun2Set/`). The Save/Load dialogs open in your Documents folder the
   first time, then remember the folder you last used (persisted).

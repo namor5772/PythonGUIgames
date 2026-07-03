@@ -106,6 +106,11 @@ never touch Tk (tk Vars are created only inside `_build_gui`).
   `parse_table_text` round-trip exactly (selftest-enforced) — Load rebuilds
   the graph from the file alone. Header lines are `# Key : value` (unknown
   keys ignored). Keep the file plain ASCII so it opens cleanly anywhere.
+  Load also restores the *settings* by inverting the header's descriptive
+  lines (`parse_tz_desc`, `parse_horizon_desc`), so a loaded file
+  regenerates itself (selftest-enforced) — if you reword the `tz_desc` /
+  `hz_desc` strings `compute()` emits, update those inverse parsers and the
+  selftest in the same change.
 - **Polar days** carry rise/set `None` end-to-end; graph code treats `None`
   as a segment break (curves flush; the daylight band emits one polygon per
   contiguous run). Never plot `None` as 0.

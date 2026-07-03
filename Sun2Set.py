@@ -519,6 +519,58 @@ def build_table_text(rows, meta):
     return "\n".join(out)
 
 
+def _rule_from_text(text):
+    """'1st Sun of Oct' -> (1, 6, 10); None if not one of fmt_rule's forms."""
+    m = re.match(r"^(1st|2nd|3rd|4th|last)\s+(%s)\s+of\s+(%s)$"
+                 % ("|".join(DAY_NAMES), "|".join(MONTH_NAMES)),
+                 (text or "").strip())
+    if not m:
+        return None
+    return (ORD_VALUE[m.group(1)], DAY_NAMES.index(m.group(2)),
+            MONTH_NAMES.index(m.group(3)) + 1)
+
+
+def parse_tz_desc(desc):
+    """Invert compute()'s '# Time zone :' header line back into settings.
+
+    Returns a dict of settings, or None when the text isn't one of the
+    three forms this app writes (hand-edited / foreign files are left be).
+    Keep in sync with the tz_desc strings built in Sun2Set.compute().
+    """
+    d = (desc or "").split(";")[0].strip()
+    if d.startswith("System local zone"):
+        return {"tz_mode": "system"}
+    m = re.match(r"Fixed UTC offset ([+-]\d{2}:\d{2})"
+                 r"(?: with DST ([+-]\d{2}:\d{2}) from (.+) to (.+))?", d)
+    if not m:
+        return None
+    out = {"tz_mode": "fixed", "fixed_hours": parse_offset(m.group(1)) / 60.0,
+           "dst_enabled": False}
+    if m.group(2):
+        start, end = _rule_from_text(m.group(3)), _rule_from_text(m.group(4))
+        if start and end:
+            out.update(dst_enabled=True,
+                       dst_hours=parse_offset(m.group(2)) / 60.0,
+                       dst_start=start, dst_end=end)
+    return out
+
+
+def parse_horizon_desc(desc):
+    """Invert compute()'s '# Horizon :' header line back into a Skyline
+    entry string ('0', '5.0' or the az:alt pair list); None if unknown.
+    Keep in sync with the hz_desc strings built in Sun2Set.compute()."""
+    d = (desc or "").strip()
+    if d.startswith("flat"):
+        return "0"
+    m = re.match(r"uniform (-?[0-9.]+) deg", d)
+    if m:
+        return m.group(1)
+    m = re.match(r"az:alt profile (.+?) \(deg", d)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
 def parse_table_text(text):
     """Inverse of build_table_text — tolerant of unknown '#' header lines."""
     meta = {"location": "", "lat": None, "lon": None,
@@ -838,6 +890,9 @@ class Sun2Set:
             f.write(self.table_text)
 
     def load_text_file(self, path):
+        """Load a saved almanac and restore every assumption its header
+        records — coordinates, time-zone / DST settings, skyline and range —
+        so calling compute() afterwards regenerates the file as-is."""
         with open(path, "r", encoding="utf-8") as f:
             text = f.read()
         rows, meta = parse_table_text(text)   # raises ValueError on bad files
@@ -848,6 +903,24 @@ class Sun2Set:
             self.lon = meta["lon"]
         if meta.get("location"):
             self.location = meta["location"]
+        tz = parse_tz_desc(meta.get("tz_desc"))
+        if tz:
+            self.tz_mode = tz["tz_mode"]
+            if tz["tz_mode"] == "fixed":
+                self.fixed_hours = tz["fixed_hours"]
+                self.dst_enabled = tz["dst_enabled"]
+                if tz["dst_enabled"]:
+                    self.dst_hours = tz["dst_hours"]
+                    self.dst_start = tz["dst_start"]
+                    self.dst_end = tz["dst_end"]
+        skyline = parse_horizon_desc(meta.get("horizon_desc"))
+        if skyline is not None:
+            try:
+                parse_horizon(skyline)
+                self.horizon_str = skyline
+            except ValueError:
+                pass                          # malformed header: keep current
+        self.start, self.days = rows[0]["date"], len(rows)
         return len(rows)
 
     # ------------------------------------------------------------------ GUI
@@ -1081,12 +1154,7 @@ class Sun2Set:
             widget.destroy()
         self._build_gui()
         for name, text in zip(entries, raw):
-            entry = getattr(self, name)
-            state = entry.cget("state")
-            entry.configure(state="normal")
-            entry.delete(0, "end")
-            entry.insert(0, text)
-            entry.configure(state=state)
+            self._set_entry_text(getattr(self, name), text)
         self.tz_var.set(tz_mode)
         self.dst_on_var.set(dst_on)
         for vars_, saved in zip((self.dst_start_vars, self.dst_end_vars),
@@ -1213,11 +1281,12 @@ class Sun2Set:
         if self.persist:
             save_config(self.config)
 
-    def _on_load(self):
-        path = filedialog.askopenfilename(
-            parent=self.root, title="Load a saved almanac…",
-            initialdir=self._file_dialog_dir(),
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+    def _on_load(self, path=None):
+        if not path:
+            path = filedialog.askopenfilename(
+                parent=self.root, title="Load a saved almanac…",
+                initialdir=self._file_dialog_dir(),
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
         if not path:
             return
         self._remember_file_dir(path)
@@ -1226,17 +1295,38 @@ class Sun2Set:
         except (OSError, ValueError) as e:
             self._set_status("✗ Load failed: %s" % e, self.T["err"])
             return
-        # reflect the loaded assumptions back into the form
+        # Reflect every restored assumption back into the form, so pressing
+        # CALCULATE regenerates the loaded file as-is.
         for entry, value in ((self.loc_entry, self.location),
-                             (self.lat_entry, "%.4f" % self.lat),
-                             (self.lon_entry, "%.4f" % self.lon),
+                             (self.lat_entry, "%.6f" % self.lat),
+                             (self.lon_entry, "%.6f" % self.lon),
+                             (self.tz_entry, "%g" % self.fixed_hours),
+                             (self.dst_entry, "%g" % self.dst_hours),
+                             (self.horizon_entry, self.horizon_str),
                              (self.date_entry, self.rows[0]["date"].isoformat()),
                              (self.days_entry, str(n))):
-            entry.delete(0, "end")
-            entry.insert(0, str(value))
+            self._set_entry_text(entry, str(value))
+        self.tz_var.set(self.tz_mode)
+        self.dst_on_var.set(self.dst_enabled)
+        for rule_vars, rule in ((self.dst_start_vars, self.dst_start),
+                                (self.dst_end_vars, self.dst_end)):
+            for var, value in zip(rule_vars, (ORD_NAMES[rule[0]],
+                                              DAY_NAMES[rule[1]],
+                                              MONTH_NAMES[rule[2] - 1])):
+                var.set(value)
+        self._on_tz_mode()
         self._refresh_views()
         self._set_status("✓ Loaded %d days from:\n%s" % (n, path),
                          self.T["ok"])
+
+    @staticmethod
+    def _set_entry_text(entry, text):
+        """Rewrite an Entry even when it is disabled (state-restore dance)."""
+        state = entry.cget("state")
+        entry.configure(state="normal")
+        entry.delete(0, "end")
+        entry.insert(0, text)
+        entry.configure(state=state)
 
     def _on_close(self):
         self.config.update({
@@ -1615,12 +1705,27 @@ def selftest():
           % dialog_dir)
 
     # 11. Headless app instance: compute + save/load round-trip, no Tk, no
-    #     real config/autosave files (persist=False).
+    #     real config/autosave files (persist=False). Load must restore every
+    #     assumption from the header, so the file regenerates itself.
+    assert parse_tz_desc("System local zone (AEST) - DST aware; x")["tz_mode"] \
+        == "system"
+    assert parse_tz_desc("Fixed UTC offset +09:30 (no daylight-saving "
+                         "adjustments)") == {"tz_mode": "fixed",
+                                             "fixed_hours": 9.5,
+                                             "dst_enabled": False}
+    assert parse_tz_desc("total nonsense") is None
+    assert parse_horizon_desc("flat 0.0 deg (open astronomical horizon)") == "0"
+    assert parse_horizon_desc("uniform 5.5 deg above the astronomical "
+                              "horizon") == "5.5"
+    assert parse_horizon_desc("mystery") is None
     import tempfile
     app = Sun2Set(root=None, persist=False)
     app.location, app.lat, app.lon = "Testville", 40.0, -75.0
     app.tz_mode, app.fixed_hours = "fixed", -5.0
-    app.start, app.days = dt.date(2026, 1, 1), 40
+    app.dst_enabled, app.dst_hours = True, -4.0
+    app.dst_start, app.dst_end = (2, 6, 3), (1, 6, 11)      # US-style rules
+    app.horizon_str = "90:4, 270:8"
+    app.start, app.days = dt.date(2026, 3, 1), 30           # spans 2nd Sun Mar
     app.compute()
     assert app.autosave() is None            # persist=False writes nothing
     with tempfile.TemporaryDirectory() as td:
@@ -1628,10 +1733,19 @@ def selftest():
         app.save_text_file(path)
         app2 = Sun2Set(root=None, persist=False)
         n = app2.load_text_file(path)
-        assert n == 40 and app2.rows == app.rows
+        assert n == 30 and app2.rows == app.rows
         assert app2.location == "Testville"
         assert abs(app2.lat - 40.0) < 1e-9 and abs(app2.lon - -75.0) < 1e-9
-    print("  headless save/load round-trip OK")
+        # every assumption came back from the header...
+        assert app2.tz_mode == "fixed" and app2.fixed_hours == -5.0
+        assert app2.dst_enabled and app2.dst_hours == -4.0
+        assert app2.dst_start == (2, 6, 3) and app2.dst_end == (1, 6, 11)
+        assert app2.horizon_str == "90:4, 270:8"
+        assert app2.start == dt.date(2026, 3, 1) and app2.days == 30
+        # ...so the loaded file regenerates itself exactly
+        app2.compute()
+        assert app2.rows == app.rows
+    print("  headless save/load round-trip OK (the file regenerates itself)")
 
     print("All Sun2Set self-tests passed.")
 
