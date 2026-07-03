@@ -15,6 +15,10 @@ Features:
     "1st Sun of Apr" at a second offset), which can mirror the system zone
     exactly for any location's local law
   * Polar day / polar night handled ('--:--:--' with 24 h / 0 h daylight)
+  * Valley mode: an optional skyline — hills h degrees above the true
+    horizon, as one uniform number or an az:alt profile (60:2, 90:6, ...) —
+    delays sunrise and advances sunset (Bennett refraction at the hill
+    altitude); days the sun never clears the ridge show '--:--:--'
   * Results become a commented text table; the assumptions (location,
     latitude, longitude, time-zone handling, algorithm) head the file
   * Graph of sunrise, sunset and day length across the whole span, with a
@@ -51,7 +55,7 @@ ERR_COLOR = "#ff6a6a"
 OK_COLOR = "#2ecc55"
 FONT = "Consolas"
 
-GRAPH_W, GRAPH_H = 840, 640   # plot canvas size
+GRAPH_W, GRAPH_H = 840, 700   # plot canvas size
 PANEL_W = 312                 # parameter panel width
 
 C_RISE = "#ffd91a"            # sunrise curve
@@ -130,16 +134,99 @@ def _hour_angle_deg(lat, decl, zenith=ZENITH_OFFICIAL):
     return math.degrees(math.acos(cos_h)), ""
 
 
-def sun_events(date, lat, lon, tz_hours):
+# ----------------------------------------------------------------------------
+# Skyline (raised horizon) support — for valleys, hills, mountain ridges.
+# A profile is a list of (azimuth, altitude) pairs in degrees; [] = flat.
+# ----------------------------------------------------------------------------
+def _zenith_for_horizon(h):
+    """Zenith angle at which the sun's upper limb crosses a skyline h deg
+    above the astronomical horizon: 16' solar semi-diameter plus Bennett's
+    altitude-dependent refraction (34' at h=0, ~5' at h=10 — a fixed 34'
+    would overshoot raised horizons by minutes of time).
+    """
+    if h == 0.0:
+        return ZENITH_OFFICIAL              # keep the NOAA-standard constant
+    hc = max(h, -1.5)                       # keep Bennett's formula sane
+    refr = 1.0 / math.tan(math.radians(hc + 7.31 / (hc + 4.4)))   # arcmin
+    return 90.0 - h + (refr + 16.0) / 60.0
+
+
+def _sun_azimuth(lat, decl, ha_deg):
+    """Sun azimuth (deg from north, clockwise; E=90) at hour angle ha_deg
+    (negative = morning, east of the meridian)."""
+    latr, dr, hr = (math.radians(v) for v in (lat, decl, ha_deg))
+    sin_alt = (math.sin(latr) * math.sin(dr)
+               + math.cos(latr) * math.cos(dr) * math.cos(hr))
+    cos_alt = math.sqrt(max(1e-9, 1.0 - sin_alt * sin_alt))
+    cos_az = ((math.sin(dr) - sin_alt * math.sin(latr))
+              / max(1e-9, cos_alt * math.cos(latr)))
+    az = math.degrees(math.acos(max(-1.0, min(1.0, cos_az))))
+    return 360.0 - az if math.sin(hr) > 0 else az
+
+
+def parse_horizon(s):
+    """Skyline entry -> profile. '' / '0' -> [] (flat); a single number ->
+    uniform hills; 'az:alt, az:alt, ...' -> a profile (N=0, E=90)."""
+    s = (s or "").strip()
+    if not s:
+        return []
+    parts = [p.strip() for p in s.split(",") if p.strip()]
+    profile = []
+    for part in parts:
+        if ":" in part:
+            az_s, alt_s = part.split(":", 1)
+            az, alt = float(az_s), float(alt_s)
+            if not 0.0 <= az <= 360.0:
+                raise ValueError("azimuth out of range")
+        elif len(parts) == 1:
+            az, alt = 0.0, float(part)
+        else:
+            raise ValueError("lists must use az:alt pairs")
+        if not -5.0 <= alt <= 60.0:
+            raise ValueError("altitude out of range")
+        profile.append((az % 360.0, alt))
+    if len(profile) == 1 and profile[0][1] == 0.0:
+        return []
+    profile.sort()
+    return profile
+
+
+def horizon_alt(profile, az):
+    """Skyline altitude toward azimuth az — linear interpolation between the
+    profile points, wrapping around north (360 -> 0)."""
+    if not profile:
+        return 0.0
+    if len(profile) == 1:
+        return profile[0][1]
+    az %= 360.0
+    lo, hi = profile[-1], profile[0]        # the wrap-around segment
+    for i in range(len(profile) - 1):
+        if profile[i][0] <= az <= profile[i + 1][0]:
+            lo, hi = profile[i], profile[i + 1]
+            break
+    span = (hi[0] - lo[0]) % 360.0
+    if span == 0.0:
+        return lo[1]
+    frac = ((az - lo[0]) % 360.0) / span
+    return lo[1] + (hi[1] - lo[1]) * frac
+
+
+def sun_events(date, lat, lon, tz_hours, horizon=None):
     """Sunrise / solar noon / sunset for one local calendar date.
 
-    lat, lon in degrees (+N, +E); tz_hours = local clock offset from UTC.
-    Returns dict with 'rise', 'noon', 'set' as minutes after local midnight
-    (rise/set None when polar), 'polar' in {'', 'night', 'day'} and
-    'daylight' in minutes. Declination and the equation of time are
-    re-evaluated *at each event's own time* (two refinement passes), which is
-    what lifts the accuracy from ~1 minute to a few seconds of the NOAA
-    reference calculator.
+    lat, lon in degrees (+N, +E); tz_hours = local clock offset from UTC;
+    horizon = a parse_horizon() skyline profile (None or [] = flat sea-level
+    horizon). Returns dict with 'rise', 'noon', 'set' as minutes after local
+    midnight (rise/set None when the sun never crosses the skyline), 'polar'
+    in {'', 'night', 'day'} and 'daylight' in minutes.
+
+    Each event iterates to its own fixed point: declination and the equation
+    of time are re-evaluated at the event's estimated time (this is what
+    matches the NOAA reference calculator to seconds), and with a skyline
+    the sun's azimuth there picks the hill altitude, which moves the event,
+    which moves the azimuth... Three passes converge well below a second.
+    A jagged profile is met at one crossing — this models a smooth skyline,
+    not multiple rises through notches.
     """
     jd0 = _julian_day(date.year, date.month, date.day)
 
@@ -155,23 +242,30 @@ def sun_events(date, lat, lon, tz_hours):
         noon = clock_noon(eot)
 
     out = {"rise": None, "noon": noon, "set": None, "polar": "", "daylight": 0.0}
-    decl, _ = _solar_coords(jd_at(noon))
-    ha, flag = _hour_angle_deg(lat, decl)
-    if ha is None:
+    decl0, eot0 = _solar_coords(jd_at(noon))
+    flags = []
+    for key, sign in (("rise", -1.0), ("set", 1.0)):
+        decl, eot = decl0, eot0              # start from the noon position
+        h = horizon_alt(horizon, 90.0 if sign < 0 else 270.0)
+        t = None
+        for _ in range(3):
+            ha, flag = _hour_angle_deg(lat, decl, _zenith_for_horizon(h))
+            if ha is None:                   # sun never reaches / never leaves
+                flags.append(flag)           # the skyline this day
+                t = None
+                break
+            h = horizon_alt(horizon, _sun_azimuth(lat, decl, sign * ha))
+            t = clock_noon(eot) + sign * 4.0 * ha
+            decl, eot = _solar_coords(jd_at(t))
+        out[key] = t
+
+    if out["rise"] is None or out["set"] is None:
+        flag = flags[0] if flags else "night"
+        out["rise"] = out["set"] = None
         out["polar"] = flag
         out["daylight"] = 0.0 if flag == "night" else 1440.0
-        return out
-
-    for key, sign in (("rise", -1.0), ("set", 1.0)):
-        t = noon + sign * 4.0 * ha           # first guess from noon declination
-        for _ in range(2):
-            decl_t, eot_t = _solar_coords(jd_at(t))
-            ha_t, _f = _hour_angle_deg(lat, decl_t)
-            if ha_t is None:                 # drifted over the polar edge on a
-                break                        # boundary day — keep the estimate
-            t = clock_noon(eot_t) + sign * 4.0 * ha_t
-        out[key] = t
-    out["daylight"] = out["set"] - out["rise"]
+    else:
+        out["daylight"] = out["set"] - out["rise"]
     return out
 
 
@@ -230,7 +324,7 @@ def dst_active(date, start_rule, end_rule):
 
 
 def compute_rows(lat, lon, start, days, tz_mode="fixed", fixed_hours=0.0,
-                 dst=None):
+                 dst=None, horizon=None):
     """The almanac table: one dict per day with times in seconds.
 
     rise/set are seconds after local midnight (None when polar);
@@ -238,7 +332,8 @@ def compute_rows(lat, lon, start, days, tz_mode="fixed", fixed_hours=0.0,
     Both events use the same per-day offset, so 'day' stays physically true
     even across a DST changeover. In fixed mode, dst may be a dict
     {"hours": float, "start": rule, "end": rule} of manual daylight-saving
-    rules (see dst_active) applied on top of fixed_hours.
+    rules (see dst_active) applied on top of fixed_hours. horizon is a
+    parse_horizon() skyline profile (None/[] = flat).
     """
     rows = []
     for i in range(days):
@@ -249,7 +344,7 @@ def compute_rows(lat, lon, start, days, tz_mode="fixed", fixed_hours=0.0,
             off_min = int(round(dst["hours"] * 60.0))
         else:
             off_min = int(round(fixed_hours * 60.0))
-        ev = sun_events(date, lat, lon, off_min / 60.0)
+        ev = sun_events(date, lat, lon, off_min / 60.0, horizon)
         if ev["polar"]:
             rise_s = set_s = None
             day_s = 0 if ev["polar"] == "night" else 86400
@@ -335,6 +430,8 @@ def build_table_text(rows, meta):
     a("# Latitude  : %.6f  (degrees, + = north)" % meta.get("lat", 0.0))
     a("# Longitude : %.6f  (degrees, + = east)" % meta.get("lon", 0.0))
     a("# Time zone : %s" % meta.get("tz_desc", ""))
+    a("# Horizon   : %s" % meta.get("horizon_desc",
+                                    "flat 0.0 deg (open astronomical horizon)"))
     a("# Range     : %d days starting %s" % (len(rows), rows[0]["date"].isoformat()))
     a("# Algorithm : NOAA solar equations (Meeus); sunrise/sunset at zenith")
     a("#             90.833 deg, which includes atmospheric refraction and")
@@ -355,7 +452,7 @@ def build_table_text(rows, meta):
 def parse_table_text(text):
     """Inverse of build_table_text — tolerant of unknown '#' header lines."""
     meta = {"location": "", "lat": None, "lon": None,
-            "tz_desc": "", "generated": ""}
+            "tz_desc": "", "horizon_desc": "", "generated": ""}
     rows = []
     for line in text.splitlines():
         s = line.strip()
@@ -375,6 +472,8 @@ def parse_table_text(text):
                 meta["lon"] = float(val.split()[0])
             elif key == "time zone":
                 meta["tz_desc"] = val
+            elif key == "horizon":
+                meta["horizon_desc"] = val
             elif key == "generated":
                 meta["generated"] = val
             continue
@@ -442,6 +541,11 @@ class Sun2Set:
         self.dst_hours = self._cfg_float(cfg, "dst_hours", 11.0, -14.0, 14.0)
         self.dst_start = self._cfg_rule(cfg, "dst_start", (1, 6, 10))
         self.dst_end = self._cfg_rule(cfg, "dst_end", (1, 6, 4))
+        self.horizon_str = str(cfg.get("horizon", "0"))
+        try:
+            parse_horizon(self.horizon_str)
+        except ValueError:
+            self.horizon_str = "0"
         self.start = dt.date.today()          # always start "today" on launch
         self.days = int(self._cfg_float(cfg, "days", DEFAULT_DAYS, 1, 1500))
 
@@ -480,8 +584,9 @@ class Sun2Set:
         if self.tz_mode == "fixed" and self.dst_enabled:
             dst = {"hours": self.dst_hours,
                    "start": self.dst_start, "end": self.dst_end}
+        profile = parse_horizon(self.horizon_str)
         self.rows = compute_rows(self.lat, self.lon, self.start, self.days,
-                                 self.tz_mode, self.fixed_hours, dst)
+                                 self.tz_mode, self.fixed_hours, dst, profile)
         if self.tz_mode == "system":
             names = " / ".join(n for n in time.tzname if n)
             tz_desc = ("System local zone (%s) - DST aware; each day's "
@@ -497,10 +602,18 @@ class Sun2Set:
         else:
             tz_desc = ("Fixed UTC offset %s (no daylight-saving adjustments)"
                        % fmt_offset(int(round(self.fixed_hours * 60))))
+        if not profile:
+            hz_desc = "flat 0.0 deg (open astronomical horizon)"
+        elif len(profile) == 1:
+            hz_desc = ("uniform %.1f deg above the astronomical horizon"
+                       % profile[0][1])
+        else:
+            hz_desc = ("az:alt profile %s (deg; N=0 E=90; linear interp)"
+                       % ", ".join("%g:%g" % p for p in profile))
         self.meta = {
             "generated": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "location": self.location, "lat": self.lat, "lon": self.lon,
-            "tz_desc": tz_desc,
+            "tz_desc": tz_desc, "horizon_desc": hz_desc,
         }
         self.table_text = build_table_text(self.rows, self.meta)
 
@@ -580,6 +693,14 @@ class Sun2Set:
                                          "%g" % self.dst_hours, width=8)
         self.dst_start_vars = self._rule_row(panel, "starts", self.dst_start)
         self.dst_end_vars = self._rule_row(panel, "ends", self.dst_end)
+
+        self._section(panel, "HORIZON")
+        self.horizon_entry = self._entry_row(panel, "Skyline", self.horizon_str)
+        tk.Label(panel, text="deg above true horizon: 0 = flat,", bg=PANEL_BG,
+                 fg=SUBTEXT, font=(FONT, 8)).pack(anchor="w", padx=12)
+        tk.Label(panel, text="5 = hills, or az:alt 60:2, 90:6, 240:8",
+                 bg=PANEL_BG, fg=SUBTEXT, font=(FONT, 8)).pack(anchor="w",
+                                                               padx=12)
 
         self._section(panel, "RANGE")
         self.date_entry = self._entry_row(panel, "Start", self.start.isoformat())
@@ -761,6 +882,12 @@ class Sun2Set:
                     return "DST offset must look like 11, -2.5 or 10:30 (|h| <= 14)"
                 dst_start = self._rule_from_vars(self.dst_start_vars)
                 dst_end = self._rule_from_vars(self.dst_end_vars)
+        horizon_str = self.horizon_entry.get().strip() or "0"
+        try:
+            parse_horizon(horizon_str)
+        except ValueError:
+            return ("Horizon must be 0, one altitude, or az:alt pairs "
+                    "like 60:2, 90:6 (alt -5..60, az 0..360)")
         try:
             start = dt.date.fromisoformat(self.date_entry.get().strip())
         except ValueError:
@@ -776,6 +903,7 @@ class Sun2Set:
         self.tz_mode, self.fixed_hours = tz_mode, fixed
         self.dst_enabled, self.dst_hours = dst_on, dst_hours
         self.dst_start, self.dst_end = dst_start, dst_end
+        self.horizon_str = horizon_str
         self.start, self.days = start, days
         return None
 
@@ -845,7 +973,7 @@ class Sun2Set:
             "tz_mode": self.tz_mode, "fixed_hours": self.fixed_hours,
             "dst_enabled": self.dst_enabled, "dst_hours": self.dst_hours,
             "dst_start": list(self.dst_start), "dst_end": list(self.dst_end),
-            "days": self.days,
+            "horizon": self.horizon_str, "days": self.days,
         })
         if self.persist:
             save_config(self.config)
@@ -943,6 +1071,13 @@ class Sun2Set:
                                     rows[-1]["date"].isoformat(), tz_short)
         c.create_text(L, 34, anchor="w", fill=SUBTEXT, font=(FONT, 8),
                       text=sub)
+        hz = self.meta.get("horizon_desc", "")
+        if hz and not hz.startswith("flat"):
+            short = hz.split(" above")[0].split(" (")[0]
+            if len(short) > 60:
+                short = short[:57] + "..."
+            c.create_text(L, 49, anchor="w", fill=SUBTEXT, font=(FONT, 8),
+                          text="skyline: %s" % short)
         lx = GRAPH_W - R
         for label, color in (("day length", C_DAY), ("sunset", C_SET),
                              ("sunrise", C_RISE)):
@@ -1080,7 +1215,45 @@ def selftest():
     else:
         print("  (system zone here isn't Sydney-like; equivalence check skipped)")
 
-    # 7. Text table round-trip, including polar '--:--:--' rows.
+    # 7. Raised horizon (valley / hills skyline).
+    assert abs(_zenith_for_horizon(0.0) - ZENITH_OFFICIAL) < 1e-12
+    assert abs(_zenith_for_horizon(10.0) - 80.357) < 0.01  # Bennett ~5.4'+16'
+    assert parse_horizon("") == [] and parse_horizon("0") == []
+    assert parse_horizon("5") == [(0.0, 5.0)]
+    prof = parse_horizon("90:4, 270:8")
+    assert horizon_alt(prof, 90) == 4.0 and horizon_alt(prof, 270) == 8.0
+    assert abs(horizon_alt(prof, 0) - 6.0) < 1e-9      # wraps through north
+    assert abs(horizon_alt(prof, 180) - 6.0) < 1e-9
+    assert horizon_alt([], 123.4) == 0.0
+    for bad in ("abc", "90:4, x", "5, 6", "0:99", "400:5"):
+        try:
+            parse_horizon(bad)
+            raise AssertionError("parse_horizon accepted %r" % bad)
+        except ValueError:
+            pass
+    flat = sun_events(dt.date(2026, 12, 21), -33.8688, 151.2093, 11.0)
+    hills = sun_events(dt.date(2026, 12, 21), -33.8688, 151.2093, 11.0,
+                       parse_horizon("5"))
+    d_rise = (hills["rise"] - flat["rise"])            # minutes later
+    d_set = (flat["set"] - hills["set"])               # minutes earlier
+    assert 15.0 < d_rise < 60.0 and 15.0 < d_set < 60.0, (d_rise, d_set)
+    # An explicitly flat profile must match the default bit-for-bit.
+    assert sun_events(dt.date(2026, 12, 21), -33.8688, 151.2093, 11.0,
+                      []) == flat
+    # Nordic valley in December: noon sun peaks at ~6.6 deg, ridge is 12.
+    ev = sun_events(dt.date(2026, 12, 21), 60.0, 10.0, 1.0,
+                    parse_horizon("12"))
+    assert ev["polar"] == "night" and ev["rise"] is None
+    # The parameter flows through compute_rows and shortens every day.
+    rows_hz = compute_rows(-33.8688, 151.2093, dt.date(2026, 7, 3), 30,
+                           "fixed", 10.0, horizon=parse_horizon("5"))
+    for hz_r, flat_r in zip(rows_hz, rows):
+        assert hz_r["day"] < flat_r["day"]
+    print("  raised-horizon skyline OK (5 deg hills: Sydney solstice rise "
+          "%s -> %s)" % (fmt_clock(flat["rise"] * 60),
+                         fmt_clock(hills["rise"] * 60)))
+
+    # 8. Text table round-trip, including polar '--:--:--' rows.
     meta = {"generated": "2026-07-03 00:00:00", "location": "Testville",
             "lat": -33.8688, "lon": 151.2093, "tz_desc": "Fixed UTC offset +10:00"}
     text = build_table_text(rows, meta)
@@ -1097,7 +1270,7 @@ def selftest():
     assert rows3_b == rows3
     print("  table text round-trip OK (incl. polar rows)")
 
-    # 8. The fixed-offset entry parser.
+    # 9. The fixed-offset entry parser.
     for s, want in (("10", 10.0), ("+10", 10.0), ("-3.5", -3.5),
                     ("9:30", 9.5), ("-3:30", -3.5), ("5.75", 5.75), ("0", 0.0)):
         assert parse_tz_hours(s) == want, s
@@ -1109,8 +1282,8 @@ def selftest():
             pass
     print("  offset parser OK")
 
-    # 9. Headless app instance: compute + save/load round-trip, no Tk, no
-    #    real config/autosave files (persist=False).
+    # 10. Headless app instance: compute + save/load round-trip, no Tk, no
+    #     real config/autosave files (persist=False).
     import tempfile
     app = Sun2Set(root=None, persist=False)
     app.location, app.lat, app.lon = "Testville", 40.0, -75.0

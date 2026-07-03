@@ -93,6 +93,15 @@ never touch Tk (tk Vars are created only inside `_build_gui`).
   of a real zone yields), and start-month > end-month wraps New Year
   (southern hemisphere). The selftest proves Sydney's rules (+10:00 std,
   +11:00 from 1st Sun Oct to 1st Sun Apr) reproduce system mode row-for-row.
+- **Skyline (raised horizon):** `parse_horizon` yields `[]` (flat), one
+  point (uniform hills) or an az:alt profile; `horizon_alt` interpolates
+  linearly with wrap-around. The event condition swaps the fixed 90.833°
+  zenith for `_zenith_for_horizon(h)` = 90° − h + Bennett refraction(h) +
+  16′ solar radius (a fixed 34′ would overshoot raised horizons by minutes),
+  and the per-event iteration also converges the azimuth → skyline lookup.
+  Single-crossing model — it does not simulate multiple rises through
+  notches in a jagged ridge. Sun-never-clears-the-ridge days reuse the
+  polar-night path ('--:--:--', 0 h).
 - **The text file is the interchange format:** `build_table_text` /
   `parse_table_text` round-trip exactly (selftest-enforced) — Load rebuilds
   the graph from the file alone. Header lines are `# Key : value` (unknown

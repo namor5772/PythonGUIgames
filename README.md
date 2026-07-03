@@ -226,6 +226,15 @@ date).
 - **Polar-safe** — days when the sun never rises or never sets show
   `--:--:--` with 0 h / 24 h daylight (try Longyearbyen: `78.2232`,
   `15.6267`).
+- **Valley / hills aware** — an optional **skyline** raises the horizon: a
+  single number for a uniform ridge (`5`), or an `az:alt` profile
+  (`60:2, 90:6, 240:8`; azimuth N=0°, E=90°, linearly interpolated with
+  wrap-around) when the hills differ by direction. Sunrise/sunset fire when
+  the sun's upper edge clears *that* line — atmospheric refraction is
+  re-evaluated at the hill altitude (Bennett's formula), the event's own
+  azimuth picks which hill applies, and winter days when the sun never
+  clears the ridge show `--:--:--`. The skyline is recorded in the file
+  header with the other assumptions.
 - **Graph** — sunrise and sunset curves over a shaded daylight band, a
   day-length curve on the same 24 h axis, month gridlines, and a **hover
   crosshair** that reads out the exact times for any day.
@@ -239,8 +248,9 @@ date).
 Window position and the last-used parameters persist in
 `%APPDATA%\Sun2Set\config.json`, and `--selftest` checks the solar math
 against reference almanac times, polar cases, the manual-DST rule engine
-(including that it reproduces the system zone exactly), table round-trips
-and save/load — all headlessly.
+(including that it reproduces the system zone exactly), the skyline model
+(delays, profiles, ridge-blocked days), table round-trips and save/load —
+all headlessly.
 
 ## Desktop shortcuts
 
