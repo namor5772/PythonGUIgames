@@ -116,6 +116,15 @@ never touch Tk (tk Vars are created only inside `_build_gui`).
   contiguous run). Never plot `None` as 0.
 - **Gotcha:** `Canvas.tkraise()` raises canvas *items*, not the widget — the
   GRAPH/TABLE tab switcher raises wrapper Frames instead.
+- **Gotcha:** `FONT` resolves per platform (Consolas is Windows-only; a
+  family the OS lacks makes Tk substitute the *proportional* system font —
+  ragged table columns, taller panel rows). Aqua widgets are taller than
+  their Windows twins too, so don't pin the left panel's height
+  (`pack_propagate(False)` clipped the status text at the bottom on macOS):
+  the panel sizes naturally and the window grows to fit, while the status
+  label sits in a fixed six-line `status_box` measured from the live font —
+  messages can neither be clipped nor resize the window. Status paths are
+  `~`-abbreviated (`_display_path`) so they fit that reserve.
 - **Gotcha:** coordinates pasted from the web contain a Unicode minus
   (U+2212), degree marks and no-break/zero-width spaces that `float()`
   rejects while looking identical on screen (real bug report: Binda NSW's

@@ -40,14 +40,18 @@ import re
 import sys
 import time
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, font as tkfont
 
 # ----------------------------------------------------------------------------
 # Look & feel. Every color the GUI uses lives in one of two selectable
 # themes (the choice persists in config.json); the dark palette matches the
-# other apps in this repo. FONT is the house font.
+# other apps in this repo. FONT is the house font — monospace, resolved per
+# platform: "Consolas" only ships with Windows, and an unknown family makes
+# Tk substitute the *proportional* system font (ragged table columns, taller
+# panel rows).
 # ----------------------------------------------------------------------------
-FONT = "Consolas"
+FONT = {"win32": "Consolas", "darwin": "Menlo"}.get(sys.platform,
+                                                    "DejaVu Sans Mono")
 
 THEMES = {
     "dark": dict(
@@ -658,6 +662,15 @@ def _default_file_dir():
     return docs if os.path.isdir(docs) else os.path.expanduser("~")
 
 
+def _display_path(path):
+    """Home-relative form ('~/…') for status messages — keeps even deep
+    save/load paths within the status box's fixed line reserve."""
+    home = os.path.expanduser("~")
+    if path == home or path.startswith(home + os.sep):
+        return "~" + path[len(home):]
+    return path
+
+
 def load_config():
     try:
         with open(_config_path(), "r", encoding="utf-8") as f:
@@ -931,10 +944,13 @@ class Sun2Set:
         root.configure(bg=T["bg"])
         root.resizable(False, False)
 
+        # The panel reports its natural size (no pack_propagate(False)): the
+        # same widgets are taller under Aqua than on Windows, and pinning the
+        # panel to the graph column's height clipped whatever packed last —
+        # the status text. The window instead grows to fit the taller column.
         panel = tk.Frame(root, bg=T["panel"], width=PANEL_W,
                          highlightbackground=T["edge"], highlightthickness=1)
         panel.pack(side="left", fill="y", padx=(10, 6), pady=10)
-        panel.pack_propagate(False)
 
         def saved(key, fallback):
             value = self.saved_form.get(key)
@@ -1002,10 +1018,18 @@ class Sun2Set:
         RoundButton(row, "LOAD…", self._on_load, T,
                     width=half, height=34).pack(side="left")
 
-        self.status = tk.Label(panel, text="", bg=T["panel"], fg=T["sub"],
+        # Status/feedback box: a fixed six-line reserve (measured from the
+        # actual font, so it tracks platform metrics). Fixed, because the
+        # panel now propagates its size — an unreserved label would resize
+        # the whole window every time the message changed.
+        line_h = tkfont.Font(root=root, font=(FONT, 9)).metrics("linespace")
+        status_box = tk.Frame(panel, bg=T["panel"], height=6 * line_h + 4)
+        status_box.pack(fill="x", padx=12, pady=(10, 12))
+        status_box.pack_propagate(False)
+        self.status = tk.Label(status_box, text="", bg=T["panel"], fg=T["sub"],
                                font=(FONT, 9), wraplength=PANEL_W - 28,
                                justify="left", anchor="nw")
-        self.status.pack(fill="both", expand=True, padx=12, pady=(10, 12))
+        self.status.pack(fill="both", expand=True)
 
         right = tk.Frame(root, bg=T["bg"])
         right.pack(side="left", fill="both", padx=(0, 10), pady=10)
@@ -1240,7 +1264,7 @@ class Sun2Set:
         try:
             path = self.autosave()
             if path:
-                msg += "\n\nAutosaved to:\n%s" % path
+                msg += "\n\nAutosaved to:\n%s" % _display_path(path)
         except OSError as e:
             msg += "\n\n(autosave failed: %s)" % e
         self._set_status(msg, self.T["ok"])
@@ -1263,7 +1287,8 @@ class Sun2Set:
         try:
             self.save_text_file(path)
             self._remember_file_dir(path)
-            self._set_status("✓ Saved %d days to:\n%s" % (len(self.rows), path),
+            self._set_status("✓ Saved %d days to:\n%s"
+                             % (len(self.rows), _display_path(path)),
                              self.T["ok"])
         except OSError as e:
             self._set_status("✗ Save failed: %s" % e, self.T["err"])
@@ -1316,7 +1341,7 @@ class Sun2Set:
                 var.set(value)
         self._on_tz_mode()
         self._refresh_views()
-        self._set_status("✓ Loaded %d days from:\n%s" % (n, path),
+        self._set_status("✓ Loaded %d days from:\n%s" % (n, _display_path(path)),
                          self.T["ok"])
 
     @staticmethod
