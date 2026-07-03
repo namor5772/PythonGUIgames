@@ -1,8 +1,9 @@
 """Sun2Set.py — a Tkinter sunrise / sunset almanac.
 
 Enter a location (latitude / longitude), choose how the time zone should be
-handled, and Sun2Set computes the local sunrise time, sunset time and day
-length for today and every day for a year ahead (366 rows by default).
+handled, and Sun2Set computes the local sunrise time, sunset time, their
+azimuths and the day length for today and every day for a year ahead
+(366 rows by default).
 
 Features:
   * NOAA solar-position equations (Jean Meeus, "Astronomical Algorithms"):
@@ -14,6 +15,9 @@ Features:
     optionally with manual daylight-saving rules ("1st Sun of Oct" to
     "1st Sun of Apr" at a second offset), which can mirror the system zone
     exactly for any location's local law
+  * Sunrise / sunset azimuths — where on the horizon the sun actually
+    appears and disappears (degrees clockwise from TRUE north, E=90;
+    no magnetic declination applied)
   * Polar day / polar night handled ('--:--:--' with 24 h / 0 h daylight)
   * Valley mode: an optional skyline — hills h degrees above the true
     horizon, as one uniform number or an az:alt profile (60:2, 90:6, ...) —
@@ -231,8 +235,10 @@ def sun_events(date, lat, lon, tz_hours, horizon=None):
     lat, lon in degrees (+N, +E); tz_hours = local clock offset from UTC;
     horizon = a parse_horizon() skyline profile (None or [] = flat sea-level
     horizon). Returns dict with 'rise', 'noon', 'set' as minutes after local
-    midnight (rise/set None when the sun never crosses the skyline), 'polar'
-    in {'', 'night', 'day'} and 'daylight' in minutes.
+    midnight (rise/set None when the sun never crosses the skyline),
+    'rise_az' / 'set_az' = the sun's azimuth at those moments (degrees
+    clockwise from true north, E=90; None with the event), 'polar' in
+    {'', 'night', 'day'} and 'daylight' in minutes.
 
     Each event iterates to its own fixed point: declination and the equation
     of time are re-evaluated at the event's estimated time (this is what
@@ -255,27 +261,31 @@ def sun_events(date, lat, lon, tz_hours, horizon=None):
         _, eot = _solar_coords(jd_at(noon))
         noon = clock_noon(eot)
 
-    out = {"rise": None, "noon": noon, "set": None, "polar": "", "daylight": 0.0}
+    out = {"rise": None, "rise_az": None, "noon": noon,
+           "set": None, "set_az": None, "polar": "", "daylight": 0.0}
     decl0, eot0 = _solar_coords(jd_at(noon))
     flags = []
     for key, sign in (("rise", -1.0), ("set", 1.0)):
         decl, eot = decl0, eot0              # start from the noon position
         h = horizon_alt(horizon, 90.0 if sign < 0 else 270.0)
-        t = None
+        t = az = None
         for _ in range(3):
             ha, flag = _hour_angle_deg(lat, decl, _zenith_for_horizon(h))
             if ha is None:                   # sun never reaches / never leaves
                 flags.append(flag)           # the skyline this day
-                t = None
+                t = az = None
                 break
-            h = horizon_alt(horizon, _sun_azimuth(lat, decl, sign * ha))
+            az = _sun_azimuth(lat, decl, sign * ha)
+            h = horizon_alt(horizon, az)
             t = clock_noon(eot) + sign * 4.0 * ha
             decl, eot = _solar_coords(jd_at(t))
         out[key] = t
+        out[key + "_az"] = az                # converged with t (and skyline)
 
     if out["rise"] is None or out["set"] is None:
         flag = flags[0] if flags else "night"
         out["rise"] = out["set"] = None
+        out["rise_az"] = out["set_az"] = None
         out["polar"] = flag
         out["daylight"] = 0.0 if flag == "night" else 1440.0
     else:
@@ -342,6 +352,8 @@ def compute_rows(lat, lon, start, days, tz_mode="fixed", fixed_hours=0.0,
     """The almanac table: one dict per day with times in seconds.
 
     rise/set are seconds after local midnight (None when polar);
+    rise_az/set_az = the sun's azimuth at those events, degrees clockwise
+    from true north (rounded to 0.1 so the text file round-trips exactly);
     day = physical daylight seconds; off = that day's UTC offset in minutes.
     Both events use the same per-day offset, so 'day' stays physically true
     even across a DST changeover. In fixed mode, dst may be a dict
@@ -360,13 +372,16 @@ def compute_rows(lat, lon, start, days, tz_mode="fixed", fixed_hours=0.0,
             off_min = int(round(fixed_hours * 60.0))
         ev = sun_events(date, lat, lon, off_min / 60.0, horizon)
         if ev["polar"]:
-            rise_s = set_s = None
+            rise_s = set_s = rise_az = set_az = None
             day_s = 0 if ev["polar"] == "night" else 86400
         else:
             rise_s = int(round(ev["rise"] * 60.0))
             set_s = int(round(ev["set"] * 60.0))
+            rise_az = round(ev["rise_az"], 1)
+            set_az = round(ev["set_az"], 1)
             day_s = set_s - rise_s
-        rows.append({"date": date, "rise": rise_s, "set": set_s,
+        rows.append({"date": date, "rise": rise_s, "rise_az": rise_az,
+                     "set": set_s, "set_az": set_az,
                      "day": day_s, "off": off_min})
     return rows
 
@@ -392,6 +407,16 @@ def fmt_offset(minutes):
     sign = "+" if minutes >= 0 else "-"
     m = abs(int(minutes))
     return "%s%02d:%02d" % (sign, m // 60, m % 60)
+
+
+def fmt_az(deg):
+    """Azimuth -> right-aligned 6-char '123.4' (None -> '---')."""
+    return "   ---" if deg is None else "%6.1f" % deg
+
+
+def parse_az(s):
+    """'123.4' -> degrees; '---' -> None."""
+    return None if s == "---" else float(s)
 
 
 def parse_clock(s):
@@ -488,7 +513,8 @@ def parse_tz_hours(s):
 # ----------------------------------------------------------------------------
 # The text file: assumptions header + one aligned row per day
 # ----------------------------------------------------------------------------
-TABLE_HEADER = "# Date        Sunrise    Sunset     Daylight   UTCoff"
+TABLE_HEADER = ("# Date        Sunrise   RiseAz   Sunset     SetAz"
+                "   Daylight   UTCoff")
 
 
 def build_table_text(rows, meta):
@@ -513,11 +539,15 @@ def build_table_text(rows, meta):
     a("#             published almanac values (real refraction varies).")
     a("# Times     : local wall clock HH:MM:SS; '--:--:--' means the sun")
     a("#             never rises / never sets that day (Daylight 00 / 24 h).")
+    a("# Azimuths  : RiseAz/SetAz = the sun's bearing at each event, degrees")
+    a("#             clockwise from TRUE north (N=0, E=90, S=180, W=270) --")
+    a("#             geographic, not magnetic; '---' on no-event days.")
     a("#")
     a(TABLE_HEADER)
     for r in rows:
-        a("%s    %s   %s   %s   %s" % (
-            r["date"].isoformat(), fmt_clock(r["rise"]), fmt_clock(r["set"]),
+        a("%s    %s  %s   %s  %s   %s   %s" % (
+            r["date"].isoformat(), fmt_clock(r["rise"]), fmt_az(r["rise_az"]),
+            fmt_clock(r["set"]), fmt_az(r["set_az"]),
             fmt_span(r["day"]), fmt_offset(r["off"])))
     a("")
     return "\n".join(out)
@@ -604,14 +634,19 @@ def parse_table_text(text):
                 meta["generated"] = val
             continue
         parts = s.split()
-        if len(parts) != 5:
+        if len(parts) == 7:
+            date_s, rise_s, raz_s, set_s, saz_s, day_s, off_s = parts
+        elif len(parts) == 5:               # pre-azimuth files still load
+            date_s, rise_s, set_s, day_s, off_s = parts
+            raz_s = saz_s = "---"
+        else:
             raise ValueError("unrecognized data line: %r" % line)
-        rise, set_ = parse_clock(parts[1]), parse_clock(parts[2])
-        day = parse_clock(parts[3])
-        rows.append({"date": dt.date.fromisoformat(parts[0]),
-                     "rise": rise, "set": set_,
+        day = parse_clock(day_s)
+        rows.append({"date": dt.date.fromisoformat(date_s),
+                     "rise": parse_clock(rise_s), "rise_az": parse_az(raz_s),
+                     "set": parse_clock(set_s), "set_az": parse_az(saz_s),
                      "day": 0 if day is None else day,
-                     "off": parse_offset(parts[4])})
+                     "off": parse_offset(off_s)})
     if not rows:
         raise ValueError("no data rows found in file")
     return rows, meta
@@ -1514,8 +1549,12 @@ class Sun2Set:
         x = p["L"] + p["pw"] * i / max(1, n - 1)
         c.create_line(x, p["T"], x, p["T"] + p["ph"], fill=th["hover"],
                       dash=(2, 3), tags="hover")
+        def event(sec, az):                   # "07:00:57 az 63.4°"
+            clock = fmt_clock(sec)
+            return clock if az is None else "%s az %.1f°" % (clock, az)
         txt = "%s   rise %s   set %s   day %s   UTC%s" % (
-            r["date"].isoformat(), fmt_clock(r["rise"]), fmt_clock(r["set"]),
+            r["date"].isoformat(), event(r["rise"], r["rise_az"]),
+            event(r["set"], r["set_az"]),
             fmt_span(r["day"]), fmt_offset(r["off"]))
         tid = c.create_text(p["L"] + 10, p["T"] + 10, anchor="nw",
                             fill=th["text"], font=(FONT, 10), text=txt,
@@ -1538,40 +1577,50 @@ def _hms(h, m, s=0):
 def selftest():
     print("Sun2Set selftest...")
 
-    # 1. Known sunrise/sunset times (local wall clock at the given offset),
-    #    verified against WolframAlpha; tolerance covers its minute rounding
-    #    plus refraction-model differences between sources.
+    # 1. Known sunrise/sunset times (local wall clock at the given offset)
+    #    and the sun's azimuth at those moments, verified against
+    #    WolframAlpha; tolerances cover its minute rounding plus
+    #    refraction-model differences between sources (±2 min of time is
+    #    up to ~1° of azimuth at high latitudes).
     cases = [
         ("London Jun-21 solstice", 51.5074, -0.1278, 1.0,
-         dt.date(2026, 6, 21), _hms(4, 43), _hms(21, 21), 120),
+         dt.date(2026, 6, 21), _hms(4, 43), _hms(21, 21), 48.9, 311.0),
         ("Sydney Dec-21 solstice", -33.8688, 151.2093, 11.0,
-         dt.date(2026, 12, 21), _hms(5, 40), _hms(20, 5), 120),
+         dt.date(2026, 12, 21), _hms(5, 40), _hms(20, 5), 119.3, 240.8),
         ("Reykjavik Dec-21", 64.1466, -21.9426, 0.0,
-         dt.date(2026, 12, 21), _hms(11, 22), _hms(15, 29), 120),
+         dt.date(2026, 12, 21), _hms(11, 22), _hms(15, 29), 151.8, 208.0),
     ]
-    for label, lat, lon, tzh, date, want_rise, want_set, tol in cases:
+    for (label, lat, lon, tzh, date,
+         want_rise, want_set, want_raz, want_saz) in cases:
         ev = sun_events(date, lat, lon, tzh)
-        got_rise, got_set = ev["rise"] * 60.0, ev["set"] * 60.0
-        for got, want, what in ((got_rise, want_rise, "rise"),
-                                (got_set, want_set, "set")):
+        for got, want, tol, what in (
+                (ev["rise"] * 60.0, want_rise, 120, "rise"),
+                (ev["set"] * 60.0, want_set, 120, "set"),
+                (ev["rise_az"], want_raz, 2.0, "rise az"),
+                (ev["set_az"], want_saz, 2.0, "set az")):
             assert abs(got - want) <= tol, (
-                "%s %s: got %s, want ~%s" % (label, what, fmt_clock(got),
-                                             fmt_clock(want)))
-    print("  reference sunrise/sunset times OK (%d locations)" % len(cases))
+                "%s %s: got %s, want ~%s" % (label, what, got, want))
+    print("  reference sunrise/sunset times + azimuths OK (%d locations)"
+          % len(cases))
 
     # 2. Polar night and midnight sun (Longyearbyen, Svalbard, 78.22 N).
     for date, expect in ((dt.date(2026, 12, 21), "night"),
                          (dt.date(2026, 6, 21), "day")):
         ev = sun_events(date, 78.2232, 15.6267, 1.0)
         assert ev["polar"] == expect and ev["rise"] is None and ev["set"] is None
+        assert ev["rise_az"] is None and ev["set_az"] is None
         assert ev["daylight"] == (0.0 if expect == "night" else 1440.0)
     print("  polar night / midnight sun OK")
 
-    # 3. Equinox at the equator: day length just over 12 h (refraction).
+    # 3. Equinox at the equator: day length just over 12 h (refraction),
+    #    sun rising due east and setting due west.
     ev = sun_events(dt.date(2027, 3, 20), 0.0, 0.0, 0.0)
     d = (ev["set"] - ev["rise"]) * 60.0
     assert _hms(12, 4) < d < _hms(12, 10), fmt_span(d)
-    print("  equator equinox day length OK (%s)" % fmt_span(d))
+    assert abs(ev["rise_az"] - 90.0) < 1.0, ev["rise_az"]
+    assert abs(ev["set_az"] - 270.0) < 1.0, ev["set_az"]
+    print("  equator equinox day length OK (%s, rise az %.1f)"
+          % (fmt_span(d), ev["rise_az"]))
 
     # 4. A full 366-day Sydney batch (fixed offset): internal consistency.
     rows = compute_rows(-33.8688, 151.2093, dt.date(2026, 7, 3), 366,
@@ -1583,6 +1632,10 @@ def selftest():
         assert r["rise"] is not None and r["set"] > r["rise"]
         assert r["day"] == r["set"] - r["rise"]
         assert r["off"] == 600
+        # Azimuths mirror around the meridian; only the declination's drift
+        # between the two events (a fraction of a degree) breaks the symmetry.
+        assert 0.0 < r["rise_az"] < 180.0 < r["set_az"] < 360.0
+        assert abs(r["rise_az"] + r["set_az"] - 360.0) < 1.5, r
     hours = [r["day"] / 3600.0 for r in rows]
     assert 9.4 < min(hours) < 10.2, min(hours)    # shortest ~9h53m (June)
     assert 14.0 < max(hours) < 14.9, max(hours)   # longest ~14h25m (December)
@@ -1649,6 +1702,13 @@ def selftest():
     d_rise = (hills["rise"] - flat["rise"])            # minutes later
     d_set = (flat["set"] - hills["set"])               # minutes earlier
     assert 15.0 < d_rise < 60.0 and 15.0 < d_set < 60.0, (d_rise, d_set)
+    # The azimuths move with the events: Sydney's December morning sun
+    # tracks from the ESE horizon toward north, so a rise delayed by a
+    # ridge happens at a *smaller* azimuth; the evening mirrors it.
+    assert 2.0 < flat["rise_az"] - hills["rise_az"] < 20.0, (
+        flat["rise_az"], hills["rise_az"])
+    assert 2.0 < hills["set_az"] - flat["set_az"] < 20.0, (
+        flat["set_az"], hills["set_az"])
     # An explicitly flat profile must match the default bit-for-bit.
     assert sun_events(dt.date(2026, 12, 21), -33.8688, 151.2093, 11.0,
                       []) == flat
@@ -1680,7 +1740,15 @@ def selftest():
     text3 = build_table_text(rows3, meta)
     rows3_b, _ = parse_table_text(text3)
     assert rows3_b == rows3
-    print("  table text round-trip OK (incl. polar rows)")
+    assert any(" ---" in ln for ln in text3.splitlines()
+               if not ln.startswith("#"))   # polar days show '---' azimuths
+    # Files saved before the RiseAz/SetAz columns existed must still load.
+    legacy = (TABLE_HEADER + "\n"
+              "2026-07-03    07:00:57   16:57:53   09:56:56   +10:00\n")
+    row_l = parse_table_text(legacy)[0][0]
+    assert row_l["rise"] == _hms(7, 0, 57) and row_l["off"] == 600
+    assert row_l["rise_az"] is None and row_l["set_az"] is None
+    print("  table text round-trip OK (incl. polar rows, legacy files)")
 
     # 9. The entry parsers: fixed offsets, and coordinates as typed OR as
     #    pasted from the web (Unicode minus U+2212, degree marks, hemisphere

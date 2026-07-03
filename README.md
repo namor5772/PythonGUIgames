@@ -208,15 +208,24 @@ hemisphere letters (`34.2196 S`), degrees-minutes-seconds
 (`34°13'10.5" S`), or text pasted straight from Wikipedia / Google Maps
 (Unicode minus signs, degree marks and hidden spaces are all handled) —
 choose how the time zone should be handled, and it computes **sunrise,
-sunset and day length for today and every day for a year ahead** (366 rows
-by default; 1–1500 settable, any start date).
+sunset — each with its azimuth — and day length for today and every day
+for a year ahead** (366 rows by default; 1–1500 settable, any start
+date).
 
 - **Accurate** — NOAA solar-position equations (Jean Meeus), with the solar
   declination and the equation of time re-evaluated *at each event's own
   time*; results are typically within a minute or two of published almanac
-  values (spot-verified against WolframAlpha for Sydney, London and
-  Reykjavik). Sunrise/sunset use the standard zenith of **90.833°**
-  (atmospheric refraction + the solar disc radius).
+  values (times *and* azimuths spot-verified against WolframAlpha for
+  Sydney, London and Reykjavik). Sunrise/sunset use the standard zenith of
+  **90.833°** (atmospheric refraction + the solar disc radius).
+- **Azimuths** — the `RiseAz` / `SetAz` columns give the sun's bearing at
+  each event, in degrees clockwise from **true north** (N=0°, E=90°), i.e.
+  where on your horizon the sun actually appears and disappears — watch the
+  rise point sweep from NE in June to SE in December (Sydney) and cross
+  exactly 90° at the equinoxes. These are *geographic* bearings, as in
+  astronomy apps and maps; a magnetic compass needle reads differently by
+  your local magnetic declination (about 12.5°E in Sydney — subtract it
+  from the table's value to get the needle reading).
 - **Time zones done honestly** — either your **system zone with DST applied
   per day** from the OS rules (the sunrise/sunset curves show the 1-hour steps
   at each changeover while day length stays smooth), or any **fixed UTC
@@ -227,8 +236,8 @@ by default; 1–1500 settable, any start date).
   zone's output exactly if you mirror its rules. Every row records the UTC
   offset it used, and the file header states the rules.
 - **Polar-safe** — days when the sun never rises or never sets show
-  `--:--:--` with 0 h / 24 h daylight (try Longyearbyen: `78.2232`,
-  `15.6267`).
+  `--:--:--` (with `---` azimuths) and 0 h / 24 h daylight (try
+  Longyearbyen: `78.2232`, `15.6267`).
 - **Valley / hills aware** — an optional **skyline** raises the horizon: a
   single number for a uniform ridge (`5`), or an `az:alt` profile
   (`60:2, 90:6, 240:8`; azimuth N=0°, E=90°, linearly interpolated with
@@ -240,14 +249,15 @@ by default; 1–1500 settable, any start date).
   header with the other assumptions.
 - **Graph** — sunrise and sunset curves over a shaded daylight band, a
   day-length curve on the same 24 h axis, month gridlines, and a **hover
-  crosshair** that reads out the exact times for any day.
+  crosshair** that reads out the exact times and azimuths for any day.
 - **Text table** — the same data as a commented text file whose header states
   every assumption (location, latitude, longitude, time-zone handling,
   algorithm, units); view it on the **TABLE** tab, **SAVE AS…** anywhere, and
   **LOAD…** a saved file later to re-display its graph. Loading also
   **restores every assumption from the header** — coordinates, time-zone /
   DST settings, skyline and range go back into the form — so a saved file
-  regenerates itself with one CALCULATE on any machine. Every calculation is
+  regenerates itself with one CALCULATE on any machine (files saved before
+  the azimuth columns existed still load). Every calculation is
   also autosaved to `%APPDATA%\Sun2Set\sun2set_latest.txt` (macOS/Linux:
   `~/Sun2Set/`). The Save/Load dialogs open in your Documents folder the
   first time, then remember the folder you last used (persisted).
@@ -259,10 +269,11 @@ by default; 1–1500 settable, any start date).
 The whole session persists in `%APPDATA%\Sun2Set\config.json`: the window
 position, theme, active tab and **every input field exactly as typed** —
 even edits you never calculated — so the app reopens just as you left it.
-`--selftest` checks the solar math against reference almanac times, polar
-cases, the manual-DST rule engine (including that it reproduces the system
-zone exactly), the skyline model (delays, profiles, ridge-blocked days),
-window-position parsing, table round-trips and save/load — all headlessly.
+`--selftest` checks the solar math against reference almanac times and
+azimuths, polar cases, the manual-DST rule engine (including that it
+reproduces the system zone exactly), the skyline model (delays, profiles,
+ridge-blocked days), window-position parsing, table round-trips (including
+pre-azimuth legacy files) and save/load — all headlessly.
 
 ## Desktop shortcuts
 

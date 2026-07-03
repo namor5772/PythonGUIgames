@@ -79,9 +79,12 @@ never touch Tk (tk Vars are created only inside `_build_gui`).
   lon, tz_hours)` returns minutes after local midnight; declination and the
   equation of time are re-evaluated *at each event's estimated time* (2
   passes) — that refinement is what matches the NOAA reference calculator.
-  Zenith 90.833° = refraction + solar disc radius. `--selftest` pins
-  WolframAlpha-verified times for London / Sydney / Reykjavik (±120 s) plus
-  polar cases; keep those anchors when touching the math.
+  Zenith 90.833° = refraction + solar disc radius. It also returns
+  `rise_az`/`set_az` — the sun's azimuth at each event (deg clockwise from
+  true north, E=90), converged in the same per-event iteration the skyline
+  code uses. `--selftest` pins WolframAlpha-verified times (±120 s) *and*
+  azimuths (±2°) for London / Sydney / Reykjavik plus polar cases; keep
+  those anchors when touching the math.
 - **DST is resolved per-day, not per-datetime:** `system_offset_minutes(date)`
   asks the OS for the offset at local *noon* (transitions happen ~2–3 AM, so
   noon's offset is in force at both sunrise and sunset). Both events use the
@@ -106,6 +109,10 @@ never touch Tk (tk Vars are created only inside `_build_gui`).
   `parse_table_text` round-trip exactly (selftest-enforced) — Load rebuilds
   the graph from the file alone. Header lines are `# Key : value` (unknown
   keys ignored). Keep the file plain ASCII so it opens cleanly anywhere.
+  Data rows have 7 columns — RiseAz/SetAz sit beside their events, stored
+  rounded to 0.1° so `round(az,1)` → `%6.1f` → `float` is lossless ('---'
+  on polar days); 5-column pre-azimuth files still parse (azimuths None,
+  also selftest-enforced).
   Load also restores the *settings* by inverting the header's descriptive
   lines (`parse_tz_desc`, `parse_horizon_desc`), so a loaded file
   regenerates itself (selftest-enforced) — if you reword the `tz_desc` /
