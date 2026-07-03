@@ -117,6 +117,14 @@ never touch Tk (tk Vars are created only inside `_build_gui`).
   Wikipedia latitude). `parse_angle` + `_clean_numeric` normalize these and
   accept hemisphere letters and DMS — don't regress lat/lon parsing to a
   bare `float()`. The offset/skyline parsers share `_clean_numeric`.
+- **Gotcha:** a Tk file dialog with no `initialdir` opens in the last
+  folder used by *any* dialog of the same executable — Windows keys that
+  memory to `pythonw.exe`, so it is shared across every Tkinter app on the
+  machine (a foreign project's folder leaked into Sun2Set's Save dialog
+  this way). Always pass `initialdir`; Sun2Set uses the persisted
+  `file_dir` (last save/load folder), falling back to the real Documents
+  folder read from the `User Shell Folders` registry key (Documents is
+  often OneDrive-redirected — never guess `~/Documents`).
 - **Theming:** every GUI color comes from `THEMES[self.theme]` via `self.T`
   — no color literals in widget/graph code (the graph aliases it as `th`
   because `T` is the plot's top margin there). The THEME toggle rebuilds the

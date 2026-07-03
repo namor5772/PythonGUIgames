@@ -501,9 +501,11 @@ def build_table_text(rows, meta):
     a("# Horizon   : %s" % meta.get("horizon_desc",
                                     "flat 0.0 deg (open astronomical horizon)"))
     a("# Range     : %d days starting %s" % (len(rows), rows[0]["date"].isoformat()))
-    a("# Algorithm : NOAA solar equations (Meeus); sunrise/sunset at zenith")
-    a("#             90.833 deg, which includes atmospheric refraction and")
-    a("#             the solar disc radius. Typically within 1-2 minutes of")
+    a("# Algorithm : NOAA solar equations (Meeus); sunrise/sunset when the")
+    a("#             sun's upper limb crosses the horizon stated above")
+    a("#             (flat = zenith 90.833 deg: 34' refraction + 16' solar")
+    a("#             radius; raised skylines re-evaluate refraction at the")
+    a("#             hill altitude). Typically within 1-2 minutes of")
     a("#             published almanac values (real refraction varies).")
     a("# Times     : local wall clock HH:MM:SS; '--:--:--' means the sun")
     a("#             never rises / never sets that day (Daylight 00 / 24 h).")
@@ -576,6 +578,32 @@ def _wm_position(geometry):
     negative coordinates (a monitor left of / above the primary)."""
     m = re.match(r"\d+x\d+([+-]\d+[+-]\d+)$", geometry)
     return m.group(1) if m else "+100+100"
+
+
+def _default_file_dir():
+    """The user's real Documents folder, for the Save/Load dialogs.
+
+    Without an explicit initialdir, a Windows file dialog opens in the last
+    folder used by *any* dialog of the same executable — and that memory is
+    keyed to pythonw.exe, i.e. shared across every Tkinter app on the
+    machine (which is how another app's folder can leak in here). Documents
+    may be OneDrive-redirected, so resolve it from the registry rather than
+    guessing ~/Documents.
+    """
+    if sys.platform == "win32":
+        try:
+            import winreg
+            key = (r"Software\Microsoft\Windows\CurrentVersion"
+                   r"\Explorer\User Shell Folders")
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key) as k:
+                raw, _type = winreg.QueryValueEx(k, "Personal")
+            path = os.path.expandvars(raw)
+            if os.path.isdir(path):
+                return path
+        except OSError:
+            pass
+    docs = os.path.join(os.path.expanduser("~"), "Documents")
+    return docs if os.path.isdir(docs) else os.path.expanduser("~")
 
 
 def load_config():
@@ -1160,22 +1188,39 @@ class Sun2Set:
         path = filedialog.asksaveasfilename(
             parent=self.root, title="Save almanac as…",
             defaultextension=".txt", initialfile=initial,
+            initialdir=self._file_dialog_dir(),
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
         if not path:
             return
         try:
             self.save_text_file(path)
+            self._remember_file_dir(path)
             self._set_status("✓ Saved %d days to:\n%s" % (len(self.rows), path),
                              self.T["ok"])
         except OSError as e:
             self._set_status("✗ Save failed: %s" % e, self.T["err"])
 
+    def _file_dialog_dir(self):
+        """Where Save As… / Load… should open: the folder you last used for
+        an almanac (persisted), else your real Documents folder."""
+        d = self.config.get("file_dir")
+        if isinstance(d, str) and os.path.isdir(d):
+            return d
+        return _default_file_dir()
+
+    def _remember_file_dir(self, path):
+        self.config["file_dir"] = os.path.dirname(os.path.abspath(path))
+        if self.persist:
+            save_config(self.config)
+
     def _on_load(self):
         path = filedialog.askopenfilename(
             parent=self.root, title="Load a saved almanac…",
+            initialdir=self._file_dialog_dir(),
             filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
         if not path:
             return
+        self._remember_file_dir(path)
         try:
             n = self.load_text_file(path)
         except (OSError, ValueError) as e:
@@ -1564,7 +1609,10 @@ def selftest():
     assert _wm_position("800x600-1200+30") == "-1200+30"
     assert _wm_position("800x600+30-1200") == "+30-1200"
     assert _wm_position("garbage") == "+100+100"
-    print("  window-position parsing OK")
+    dialog_dir = _default_file_dir()
+    assert os.path.isdir(dialog_dir), dialog_dir
+    print("  window-position parsing OK; file dialogs default to %s"
+          % dialog_dir)
 
     # 11. Headless app instance: compute + save/load round-trip, no Tk, no
     #     real config/autosave files (persist=False).

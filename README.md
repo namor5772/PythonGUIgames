@@ -246,7 +246,8 @@ by default; 1–1500 settable, any start date).
   algorithm, units); view it on the **TABLE** tab, **SAVE AS…** anywhere, and
   **LOAD…** a saved file later to re-display its graph. Every calculation is
   also autosaved to `%APPDATA%\Sun2Set\sun2set_latest.txt` (macOS/Linux:
-  `~/Sun2Set/`).
+  `~/Sun2Set/`). The Save/Load dialogs open in your Documents folder the
+  first time, then remember the folder you last used (persisted).
 - **Rounded controls, two looks** — every button is a rounded-corner widget
   (same style as MyPocketTanks), and a **THEME** toggle flips between the
   dark house style and a light theme, keeping everything you've typed; the
