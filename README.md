@@ -5,6 +5,9 @@ A collection of Python GUI games built with **Tkinter**:
 - **MyTetris** — an accurate, guideline-faithful clone of the classic game.
 - **MyPocketTanks** — a turn-based artillery duel on destructible terrain,
   in the spirit of Pocket Tanks / Scorched Earth.
+- **Sun2Set** — a bonus *non-game* in the same style: a sunrise / sunset
+  almanac that computes, graphs, saves and reloads a year of sun times for
+  any location on Earth.
 
 Everything here is **pure standard library** — Tkinter, `wave`, `json`,
 `winsound`/`afplay`, etc. all ship with CPython, so there's nothing to `pip
@@ -44,8 +47,10 @@ python3 -c "import tkinter; print('tkinter', tkinter.TkVersion)"
 ```bash
 python3 MyTetris.py                 # play Tetris
 python3 MyPocketTanks.py            # play the artillery duel
+python3 Sun2Set.py                  # the sunrise/sunset almanac
 python3 MyTetris.py --selftest      # headless logic self-test (no window)
 python3 MyPocketTanks.py --selftest
+python3 Sun2Set.py --selftest
 ```
 
 **Windows (PowerShell):**
@@ -55,8 +60,10 @@ py -m venv .venv                    # one-time: create the (git-ignored) venv
 .venv\Scripts\Activate.ps1          # activate it
 .venv\Scripts\python.exe MyTetris.py                 # play Tetris
 .venv\Scripts\python.exe MyPocketTanks.py            # play the artillery duel
+.venv\Scripts\python.exe Sun2Set.py                  # the sunrise/sunset almanac
 .venv\Scripts\python.exe MyTetris.py --selftest      # headless self-tests
 .venv\Scripts\python.exe MyPocketTanks.py --selftest
+.venv\Scripts\python.exe Sun2Set.py --selftest
 ```
 
 The `.venv` keeps the project isolated for if dependencies are ever added; since
@@ -193,6 +200,48 @@ count and last weapon) persists in `%APPDATA%\MyPocketTanks\config.json`
 headlessly plus plays full AI-vs-AI matches at every difficulty, including
 one-weapon matches.
 
+## Sun2Set
+
+A bonus **non-game** app in the same stdlib-only Tkinter style: a **sunrise /
+sunset almanac**. Type a latitude / longitude, choose how the time zone should
+be handled, and it computes **sunrise, sunset and day length for today and
+every day for a year ahead** (366 rows by default; 1–1500 settable, any start
+date).
+
+- **Accurate** — NOAA solar-position equations (Jean Meeus), with the solar
+  declination and the equation of time re-evaluated *at each event's own
+  time*; results are typically within a minute or two of published almanac
+  values (spot-verified against WolframAlpha for Sydney, London and
+  Reykjavik). Sunrise/sunset use the standard zenith of **90.833°**
+  (atmospheric refraction + the solar disc radius).
+- **Time zones done honestly** — either your **system zone with DST applied
+  per day** from the OS rules (the sunrise/sunset curves show the 1-hour steps
+  at each changeover while day length stays smooth), or any **fixed UTC
+  offset** (`10`, `-3.5`, `9:30`…) — optionally with **manual daylight-saving
+  rules**: tick *with daylight saving*, set the DST offset and the start/end
+  rules the way the laws are written (`1st Sun of Oct` → `1st Sun of Apr`),
+  and fixed mode follows any location's local law — reproducing the system
+  zone's output exactly if you mirror its rules. Every row records the UTC
+  offset it used, and the file header states the rules.
+- **Polar-safe** — days when the sun never rises or never sets show
+  `--:--:--` with 0 h / 24 h daylight (try Longyearbyen: `78.2232`,
+  `15.6267`).
+- **Graph** — sunrise and sunset curves over a shaded daylight band, a
+  day-length curve on the same 24 h axis, month gridlines, and a **hover
+  crosshair** that reads out the exact times for any day.
+- **Text table** — the same data as a commented text file whose header states
+  every assumption (location, latitude, longitude, time-zone handling,
+  algorithm, units); view it on the **TABLE** tab, **SAVE AS…** anywhere, and
+  **LOAD…** a saved file later to re-display its graph. Every calculation is
+  also autosaved to `%APPDATA%\Sun2Set\sun2set_latest.txt` (macOS/Linux:
+  `~/Sun2Set/`).
+
+Window position and the last-used parameters persist in
+`%APPDATA%\Sun2Set\config.json`, and `--selftest` checks the solar math
+against reference almanac times, polar cases, the manual-DST rule engine
+(including that it reproduces the system zone exactly), table round-trips
+and save/load — all headlessly.
+
 ## Desktop shortcuts
 
 Create a double-clickable launcher so you don't need a terminal.
@@ -233,6 +282,18 @@ This writes **`mypockettanks.ico`** (a tiny artillery duel — a red tank lobbin
 a shell into an explosion under a starry sky, drawn directly as ICO bytes) and
 creates **`MyPocketTanks.lnk`** on your Desktop.
 
+**Sun2Set shortcut:**
+
+```powershell
+.venv\Scripts\python.exe make_sun2set_icon.py
+.\create_shortcut.ps1 -Script Sun2Set.py -Icon sun2set.ico -Name "Sun2Set"
+```
+
+This writes **`sun2set.ico`** (a sunset over the sea — the sun half-dipped
+below the horizon with a golden reflection down the water, beneath the dotted
+arc of its day-path across a dusk sky) and creates **`Sun2Set.lnk`** on your
+Desktop.
+
 `create_shortcut.ps1` is parameterized, so it can make a shortcut for any app:
 
 ```powershell
@@ -268,6 +329,17 @@ This writes **`mypockettanks.png`** (the same artillery-duel scene as the Window
 icon, rendered natively at 1024 px), packs it into **`mypockettanks.icns`**, and
 creates **`MyPocketTanks.app`** on your Desktop.
 
+**Sun2Set shortcut:**
+
+```bash
+python3 make_sun2set_icon_mac.py
+./create_shortcut.command Sun2Set Sun2Set.py sun2set.png
+```
+
+This writes **`sun2set.png`** (the same sunset-over-the-sea scene as the
+Windows icon, rendered natively at 1024 px), packs it into **`sun2set.icns`**,
+and creates **`Sun2Set.app`** on your Desktop.
+
 `create_shortcut.command` takes the same optional name / target script / icon:
 
 ```bash
@@ -284,11 +356,14 @@ creates **`MyPocketTanks.app`** on your Desktop.
 | --- | --- |
 | `MyTetris.py` | The game — accurate Tetris clone (SRS, 7-bag, DAS, ghost, hold, next-3, T-spins, back-to-back, start menu, difficulty, sound, high scores) plus a headless `--selftest`. |
 | `MyPocketTanks.py` | Artillery duel — weapon draft or one-weapon matches (settable 1–20 rounds), 20 weapons, destructible terrain, wind, fuel-limited movement, AI or hotseat, sound — plus a headless `--selftest`. |
+| `Sun2Set.py` | Bonus non-game — sunrise/sunset almanac: a year of sunrise, sunset and day length for any location (NOAA equations), DST-aware or fixed-offset, graph with hover readout, assumptions-headed text file with Save/Load — plus a headless `--selftest`. |
 | `make_tetris_icon.py` | **Windows icon** — generates `mytetris.ico` by writing the ICO/BMP bytes directly (no Pillow). |
 | `make_pockettanks_icon.py` | **Windows icon** — generates `mypockettanks.ico` (tank, shell arc, explosion, starry sky); reuses `make_tetris_icon.build_ico()`. No Pillow. |
+| `make_sun2set_icon.py` | **Windows icon** — generates `sun2set.ico` (sunset over the sea, with the sun's dotted day-path arc); reuses `make_tetris_icon.build_ico()`. No Pillow. |
 | `make_troll_icon.py` | **Windows funny icon** — generates `mytetris_troll.ico` (*The Troll Piece*) as a multi-resolution ICO (256 px PNG + 48/32/16 px BMP), reusing the macOS scene. No Pillow. |
 | `make_tetris_icon_mac.py` | **macOS icon** — generates `mytetris.png` (*The Troll Piece*) by writing the PNG bytes directly (zlib + chunks, no Pillow). |
 | `make_pockettanks_icon_mac.py` | **macOS icon** — generates `mypockettanks.png` (the artillery duel at 1024 px), reusing `make_tetris_icon_mac.py`'s rasterizer + PNG writer. No Pillow. |
+| `make_sun2set_icon_mac.py` | **macOS icon** — generates `sun2set.png` (the sunset scene at 1024 px), reusing `make_tetris_icon_mac.py`'s rasterizer + PNG writer. No Pillow. |
 | `create_shortcut.ps1` | **Windows** — creates a Desktop `.lnk` for any app (parameterized: `-Script`, `-Icon`, `-Name`). |
 | `create_shortcut.command` | **macOS** — builds an `.icns` and a clickable `.app` on the Desktop (optional args: name, target script, icon PNG; defaults to MyTetris). |
 

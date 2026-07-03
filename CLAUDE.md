@@ -7,7 +7,8 @@ Guidance for working in this repository. See `README.md` for user-facing docs.
 `PythonGUIgames` — a collection of Python **Tkinter** GUI games. The main apps
 are `MyTetris.py`, an accurate, guideline-faithful Tetris clone, and
 `MyPocketTanks.py`, a turn-based artillery duel (Pocket Tanks / Scorched Earth
-style) on destructible terrain.
+style) on destructible terrain. `Sun2Set.py` is a bonus non-game in the same
+style: a sunrise/sunset almanac (a year of sun times, graphed and exportable).
 
 **Pure standard library only.** No third-party packages — Tkinter, `winsound`,
 `wave`, `json`, etc. all ship with CPython. Keep it dependency-free; don't add a
@@ -28,6 +29,8 @@ style) on destructible terrain.
 .venv\Scripts\python.exe MyTetris.py --selftest   # headless logic check, no window
 .venv\Scripts\python.exe MyPocketTanks.py             # same pattern
 .venv\Scripts\python.exe MyPocketTanks.py --selftest
+.venv\Scripts\python.exe Sun2Set.py                   # same pattern
+.venv\Scripts\python.exe Sun2Set.py --selftest
 ```
 
 `--selftest` drives all difficulties for thousands of frames and asserts no
@@ -65,6 +68,43 @@ headless — `step()` is pure logic driven by `--selftest`; `tick()` = `step()` 
 - **Persistence:** `%APPDATA%\MyPocketTanks\config.json` (window pos, mode,
   AI level, match style/rounds/last one-weapon pick), gated by the `persist`
   flag like MyTetris.
+
+## Sun2Set architecture
+
+Same logic/GUI split: `Sun2Set(root=None)` is fully headless — parameters are
+plain attributes, and `compute()` / `save_text_file()` / `load_text_file()`
+never touch Tk (tk Vars are created only inside `_build_gui`).
+
+- **Solar math is pure module functions** (NOAA/Meeus). `sun_events(date, lat,
+  lon, tz_hours)` returns minutes after local midnight; declination and the
+  equation of time are re-evaluated *at each event's estimated time* (2
+  passes) — that refinement is what matches the NOAA reference calculator.
+  Zenith 90.833° = refraction + solar disc radius. `--selftest` pins
+  WolframAlpha-verified times for London / Sydney / Reykjavik (±120 s) plus
+  polar cases; keep those anchors when touching the math.
+- **DST is resolved per-day, not per-datetime:** `system_offset_minutes(date)`
+  asks the OS for the offset at local *noon* (transitions happen ~2–3 AM, so
+  noon's offset is in force at both sunrise and sunset). Both events use the
+  same offset, which keeps `day == set - rise` physically true across
+  changeovers; the 1-hour wall-clock steps visible in the curves are correct.
+- **Manual DST rules** (fixed mode) encode how the laws are written: a rule
+  is `(ordinal, weekday, month)` with ordinal −1 = "last"; `dst_active` is
+  start-date *inclusive*, end-date *exclusive* (exactly what noon sampling
+  of a real zone yields), and start-month > end-month wraps New Year
+  (southern hemisphere). The selftest proves Sydney's rules (+10:00 std,
+  +11:00 from 1st Sun Oct to 1st Sun Apr) reproduce system mode row-for-row.
+- **The text file is the interchange format:** `build_table_text` /
+  `parse_table_text` round-trip exactly (selftest-enforced) — Load rebuilds
+  the graph from the file alone. Header lines are `# Key : value` (unknown
+  keys ignored). Keep the file plain ASCII so it opens cleanly anywhere.
+- **Polar days** carry rise/set `None` end-to-end; graph code treats `None`
+  as a segment break (curves flush; the daylight band emits one polygon per
+  contiguous run). Never plot `None` as 0.
+- **Gotcha:** `Canvas.tkraise()` raises canvas *items*, not the widget — the
+  GRAPH/TABLE tab switcher raises wrapper Frames instead.
+- **Persistence:** `%APPDATA%\Sun2Set\config.json` (window pos + last params)
+  and an autosave of the latest table to `%APPDATA%\Sun2Set\sun2set_latest.txt`
+  on every Calculate — both gated by the `persist` flag like the games.
 
 ## MyTetris architecture
 
@@ -134,10 +174,13 @@ testable headlessly. Preserve it.
 | --- | --- |
 | `MyTetris.py` | The game (and its `--selftest`). |
 | `MyPocketTanks.py` | The artillery duel (and its `--selftest`). |
+| `Sun2Set.py` | The sunrise/sunset almanac (and its `--selftest`). |
 | `make_tetris_icon.py` | Generates `mytetris.ico` (tidy falling-T scene) by writing the ICO/BMP bytes directly (no Pillow). |
 | `make_pockettanks_icon.py` | Generates `mypockettanks.ico` (tank + shell arc + explosion scene). Reuses `make_tetris_icon.build_ico()`; no Pillow. |
+| `make_sun2set_icon.py` | Generates `sun2set.ico` (sunset over the sea + the sun's dotted day-path arc). Reuses `make_tetris_icon.build_ico()`; no Pillow. |
 | `make_troll_icon.py` | Generates `mytetris_troll.ico` — the funny "Troll Piece" as a multi-resolution Windows ICO (256px PNG + 48/32/16 BMP). Reuses `make_tetris_icon_mac.build_scene()` and downsamples; no Pillow. |
 | `make_tetris_icon_mac.py` | Generates `mytetris.png` (the macOS "Troll Piece" icon) by writing the PNG bytes directly (zlib + chunks, no Pillow). |
 | `make_pockettanks_icon_mac.py` | Generates `mypockettanks.png` (macOS, 1024px) — the same artillery-duel scene as the ICO, rendered natively; reuses `make_tetris_icon_mac`'s rasterizer/PNG writer. |
+| `make_sun2set_icon_mac.py` | Generates `sun2set.png` (macOS, 1024px) — the same sunset scene as the ICO, rendered natively; reuses `make_tetris_icon_mac`'s rasterizer/PNG writer. |
 | `create_shortcut.ps1` | **Windows** Desktop `.lnk`; parameterized `-Script` / `-Icon` / `-Name`, defaults to MyTetris. |
 | `create_shortcut.command` | **macOS**: `sips`+`iconutil` build the `.icns`, then assemble a clickable `.app` on the Desktop. Args: name, script, icon PNG (defaults = MyTetris). Bakes in the found `python3` (Finder gives apps a minimal PATH) and absolute project paths. |

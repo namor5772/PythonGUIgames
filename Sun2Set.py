@@ -1,0 +1,1144 @@
+"""Sun2Set.py — a Tkinter sunrise / sunset almanac.
+
+Enter a location (latitude / longitude), choose how the time zone should be
+handled, and Sun2Set computes the local sunrise time, sunset time and day
+length for today and every day for a year ahead (366 rows by default).
+
+Features:
+  * NOAA solar-position equations (Jean Meeus, "Astronomical Algorithms"):
+    typically within a minute or two of published almanac values
+  * Zenith 90.833 deg — includes atmospheric refraction + the solar disc
+    radius, so "sunrise" is the moment the sun's upper edge appears
+  * Time zone: either the system zone (daylight saving applied per day from
+    the OS rules) or a fixed UTC offset you type in (e.g. 10, -3.5, 9:30) —
+    optionally with manual daylight-saving rules ("1st Sun of Oct" to
+    "1st Sun of Apr" at a second offset), which can mirror the system zone
+    exactly for any location's local law
+  * Polar day / polar night handled ('--:--:--' with 24 h / 0 h daylight)
+  * Results become a commented text table; the assumptions (location,
+    latitude, longitude, time-zone handling, algorithm) head the file
+  * Graph of sunrise, sunset and day length across the whole span, with a
+    hover crosshair that reads out exact values per day
+  * Save the table anywhere / Load a previously saved table to re-display it
+  * Every calculation is also autosaved to %APPDATA%\\Sun2Set\\sun2set_latest.txt
+  * Config persistence (window position + last-used parameters)
+    in %APPDATA%\\Sun2Set
+
+Run:  python Sun2Set.py          Self-test (headless):  python Sun2Set.py --selftest
+"""
+
+import datetime as dt
+import json
+import math
+import os
+import sys
+import time
+import tkinter as tk
+from tkinter import filedialog
+
+# ----------------------------------------------------------------------------
+# Look & feel (same palette / font family as the other apps in this repo)
+# ----------------------------------------------------------------------------
+BG = "#0b0b12"
+TEXT = "#e6e6ec"
+SUBTEXT = "#9a9ab0"
+GOLD = "#ffd91a"
+PANEL_BG = "#12121c"
+PANEL_EDGE = "#2a2a3a"
+BTN_BG = "#1d1d2c"
+BTN_EDGE = "#3a3a52"
+ERR_COLOR = "#ff6a6a"
+OK_COLOR = "#2ecc55"
+FONT = "Consolas"
+
+GRAPH_W, GRAPH_H = 840, 640   # plot canvas size
+PANEL_W = 312                 # parameter panel width
+
+C_RISE = "#ffd91a"            # sunrise curve
+C_SET = "#ff6a3d"             # sunset curve
+C_DAY = "#2ecc55"             # day-length curve
+C_BAND = "#26210f"            # shaded daylight band between the curves
+C_GRID = "#20263a"
+C_AXIS = "#3a3a52"
+
+DEFAULT_LOCATION = "Sydney, Australia"
+DEFAULT_LAT, DEFAULT_LON = -33.8688, 151.2093
+DEFAULT_DAYS = 366            # today + one full year (inclusive of both ends)
+
+# Sun center 50 arcmin below the geometric horizon at rise/set:
+# 34' standard atmospheric refraction + 16' solar disc radius.
+ZENITH_OFFICIAL = 90.833
+
+
+# ----------------------------------------------------------------------------
+# Solar mathematics (NOAA / Meeus). Pure functions — no Tk, fully testable.
+# ----------------------------------------------------------------------------
+def _julian_day(year, month, day):
+    """Julian Day at 00:00 UT for a Gregorian calendar date (Meeus ch. 7)."""
+    if month <= 2:
+        year -= 1
+        month += 12
+    a = year // 100
+    b = 2 - a + a // 4
+    return int(365.25 * (year + 4716)) + int(30.6001 * (month + 1)) + day + b - 1524.5
+
+
+def _solar_coords(jd):
+    """Sun declination (deg) and equation of time (minutes) at Julian Day jd.
+
+    The equation of time is how far a sundial runs ahead of the clock; it is
+    what makes solar noon drift +/-16 min around 12:00 across the year.
+    """
+    T = (jd - 2451545.0) / 36525.0          # Julian centuries since J2000.0
+    L0 = (280.46646 + T * (36000.76983 + T * 0.0003032)) % 360.0
+    M = 357.52911 + T * (35999.05029 - 0.0001537 * T)
+    e = 0.016708634 - T * (0.000042037 + 0.0000001267 * T)
+    Mr = math.radians(M)
+    C = (math.sin(Mr) * (1.914602 - T * (0.004817 + 0.000014 * T))
+         + math.sin(2 * Mr) * (0.019993 - 0.000101 * T)
+         + math.sin(3 * Mr) * 0.000289)
+    omega = math.radians(125.04 - 1934.136 * T)
+    lam = L0 + C - 0.00569 - 0.00478 * math.sin(omega)     # apparent longitude
+    eps = (23.0 + (26.0 + (21.448 - T * (46.815 + T * (0.00059 - T * 0.001813)))
+                   / 60.0) / 60.0) + 0.00256 * math.cos(omega)
+    decl = math.degrees(math.asin(math.sin(math.radians(eps))
+                                  * math.sin(math.radians(lam))))
+    y = math.tan(math.radians(eps / 2.0)) ** 2
+    L0r = math.radians(L0)
+    eot = 4.0 * math.degrees(
+        y * math.sin(2.0 * L0r)
+        - 2.0 * e * math.sin(Mr)
+        + 4.0 * e * y * math.sin(Mr) * math.cos(2.0 * L0r)
+        - 0.5 * y * y * math.sin(4.0 * L0r)
+        - 1.25 * e * e * math.sin(2.0 * Mr))
+    return decl, eot
+
+
+def _hour_angle_deg(lat, decl, zenith=ZENITH_OFFICIAL):
+    """Half the daylight arc, in degrees (1 deg = 4 minutes of time).
+
+    Returns (angle, "") on a normal day, or (None, "night"/"day") when the
+    sun stays below / above the horizon all day (polar night / midnight sun).
+    """
+    latr, dr = math.radians(lat), math.radians(decl)
+    cos_h = ((math.cos(math.radians(zenith)) - math.sin(latr) * math.sin(dr))
+             / (math.cos(latr) * math.cos(dr)))
+    if cos_h > 1.0:
+        return None, "night"
+    if cos_h < -1.0:
+        return None, "day"
+    return math.degrees(math.acos(cos_h)), ""
+
+
+def sun_events(date, lat, lon, tz_hours):
+    """Sunrise / solar noon / sunset for one local calendar date.
+
+    lat, lon in degrees (+N, +E); tz_hours = local clock offset from UTC.
+    Returns dict with 'rise', 'noon', 'set' as minutes after local midnight
+    (rise/set None when polar), 'polar' in {'', 'night', 'day'} and
+    'daylight' in minutes. Declination and the equation of time are
+    re-evaluated *at each event's own time* (two refinement passes), which is
+    what lifts the accuracy from ~1 minute to a few seconds of the NOAA
+    reference calculator.
+    """
+    jd0 = _julian_day(date.year, date.month, date.day)
+
+    def jd_at(minutes_local):
+        return jd0 + (minutes_local - tz_hours * 60.0) / 1440.0
+
+    def clock_noon(eot):
+        return 720.0 - 4.0 * lon + tz_hours * 60.0 - eot
+
+    noon = 720.0
+    for _ in range(2):                       # equation of time varies slowly
+        _, eot = _solar_coords(jd_at(noon))
+        noon = clock_noon(eot)
+
+    out = {"rise": None, "noon": noon, "set": None, "polar": "", "daylight": 0.0}
+    decl, _ = _solar_coords(jd_at(noon))
+    ha, flag = _hour_angle_deg(lat, decl)
+    if ha is None:
+        out["polar"] = flag
+        out["daylight"] = 0.0 if flag == "night" else 1440.0
+        return out
+
+    for key, sign in (("rise", -1.0), ("set", 1.0)):
+        t = noon + sign * 4.0 * ha           # first guess from noon declination
+        for _ in range(2):
+            decl_t, eot_t = _solar_coords(jd_at(t))
+            ha_t, _f = _hour_angle_deg(lat, decl_t)
+            if ha_t is None:                 # drifted over the polar edge on a
+                break                        # boundary day — keep the estimate
+            t = clock_noon(eot_t) + sign * 4.0 * ha_t
+        out[key] = t
+    out["daylight"] = out["set"] - out["rise"]
+    return out
+
+
+def system_offset_minutes(date):
+    """The OS's UTC offset (minutes) for this local date, DST included.
+
+    Evaluated at local *noon*: DST transitions happen around 2-3 AM, so
+    noon's offset is the one in force at both sunrise and sunset — even on
+    the transition day itself.
+    """
+    local_noon = dt.datetime(date.year, date.month, date.day, 12, 0)
+    return round(local_noon.astimezone().utcoffset().total_seconds() / 60)
+
+
+# ----------------------------------------------------------------------------
+# Manual daylight-saving rules — how DST laws are actually written: "the Nth
+# <weekday> of <month>". A rule is a tuple (ordinal, weekday, month) with
+# ordinal 1-4 or -1 for "last", weekday 0=Mon..6=Sun, month 1..12.
+# ----------------------------------------------------------------------------
+ORD_NAMES = {1: "1st", 2: "2nd", 3: "3rd", 4: "4th", -1: "last"}
+ORD_VALUE = {v: k for k, v in ORD_NAMES.items()}
+DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def fmt_rule(rule):
+    return "%s %s of %s" % (ORD_NAMES[rule[0]], DAY_NAMES[rule[1]],
+                            MONTH_NAMES[rule[2] - 1])
+
+
+def nth_weekday_date(year, month, ordinal, weekday):
+    """E.g. the 1st Sunday of October: nth_weekday_date(y, 10, 1, 6)."""
+    if ordinal == -1:
+        nxt = dt.date(year + month // 12, month % 12 + 1, 1)
+        last = nxt - dt.timedelta(days=1)
+        return last - dt.timedelta(days=(last.weekday() - weekday) % 7)
+    first = dt.date(year, month, 1)
+    return first + dt.timedelta(days=(weekday - first.weekday()) % 7
+                                + 7 * (ordinal - 1))
+
+
+def dst_active(date, start_rule, end_rule):
+    """Is daylight saving in force at *noon* of this date?
+
+    Start date inclusive, end date exclusive — exactly what per-day noon
+    sampling of an OS zone yields, since real transitions happen at 2-3 AM
+    (springing forward before noon; falling back before noon too). Southern-
+    hemisphere periods (start month after end month) wrap the New Year.
+    """
+    s = nth_weekday_date(date.year, start_rule[2], start_rule[0], start_rule[1])
+    e = nth_weekday_date(date.year, end_rule[2], end_rule[0], end_rule[1])
+    if s <= e:
+        return s <= date < e          # northern style: DST within one year
+    return date >= s or date < e      # southern style: wraps the year end
+
+
+def compute_rows(lat, lon, start, days, tz_mode="fixed", fixed_hours=0.0,
+                 dst=None):
+    """The almanac table: one dict per day with times in seconds.
+
+    rise/set are seconds after local midnight (None when polar);
+    day = physical daylight seconds; off = that day's UTC offset in minutes.
+    Both events use the same per-day offset, so 'day' stays physically true
+    even across a DST changeover. In fixed mode, dst may be a dict
+    {"hours": float, "start": rule, "end": rule} of manual daylight-saving
+    rules (see dst_active) applied on top of fixed_hours.
+    """
+    rows = []
+    for i in range(days):
+        date = start + dt.timedelta(days=i)
+        if tz_mode == "system":
+            off_min = system_offset_minutes(date)
+        elif dst and dst_active(date, dst["start"], dst["end"]):
+            off_min = int(round(dst["hours"] * 60.0))
+        else:
+            off_min = int(round(fixed_hours * 60.0))
+        ev = sun_events(date, lat, lon, off_min / 60.0)
+        if ev["polar"]:
+            rise_s = set_s = None
+            day_s = 0 if ev["polar"] == "night" else 86400
+        else:
+            rise_s = int(round(ev["rise"] * 60.0))
+            set_s = int(round(ev["set"] * 60.0))
+            day_s = set_s - rise_s
+        rows.append({"date": date, "rise": rise_s, "set": set_s,
+                     "day": day_s, "off": off_min})
+    return rows
+
+
+# ----------------------------------------------------------------------------
+# Formatting / parsing helpers
+# ----------------------------------------------------------------------------
+def fmt_clock(sec):
+    """Seconds after midnight -> wall clock 'HH:MM:SS' (None -> '--:--:--')."""
+    if sec is None:
+        return "--:--:--"
+    s = int(round(sec)) % 86400
+    return "%02d:%02d:%02d" % (s // 3600, s // 60 % 60, s % 60)
+
+
+def fmt_span(sec):
+    """Duration 'HH:MM:SS' — unlike fmt_clock, 24:00:00 stays 24:00:00."""
+    s = int(round(sec))
+    return "%02d:%02d:%02d" % (s // 3600, s // 60 % 60, s % 60)
+
+
+def fmt_offset(minutes):
+    sign = "+" if minutes >= 0 else "-"
+    m = abs(int(minutes))
+    return "%s%02d:%02d" % (sign, m // 60, m % 60)
+
+
+def parse_clock(s):
+    """'HH:MM:SS' -> seconds; '--:--:--' -> None. Accepts 24:00:00."""
+    if s.startswith("--"):
+        return None
+    h, m, sec = s.split(":")
+    return int(h) * 3600 + int(m) * 60 + int(sec)
+
+
+def parse_offset(s):
+    """'+10:00' / '-03:30' -> minutes."""
+    sign = -1 if s[0] == "-" else 1
+    h, m = s.lstrip("+-").split(":")
+    return sign * (int(h) * 60 + int(m))
+
+
+def parse_tz_hours(s):
+    """User-typed fixed offset: '10', '-3.5', '9:30', '+5:45' -> hours."""
+    s = s.strip()
+    if not s:
+        raise ValueError("empty offset")
+    sign = -1.0 if s[0] == "-" else 1.0
+    body = s.lstrip("+-")
+    if ":" in body:
+        h, m = body.split(":", 1)
+        val = int(h) + int(m) / 60.0
+    else:
+        val = float(body)
+    val *= sign
+    if not -14.0 <= val <= 14.0:
+        raise ValueError("offset out of range")
+    return val
+
+
+# ----------------------------------------------------------------------------
+# The text file: assumptions header + one aligned row per day
+# ----------------------------------------------------------------------------
+TABLE_HEADER = "# Date        Sunrise    Sunset     Daylight   UTCoff"
+
+
+def build_table_text(rows, meta):
+    out = []
+    a = out.append
+    # Plain ASCII throughout the file, so it opens cleanly in any editor.
+    a("# Sun2Set almanac - sunrise, sunset and day length")
+    a("# Generated : %s" % meta.get("generated", ""))
+    if meta.get("location"):
+        a("# Location  : %s" % meta["location"])
+    a("# Latitude  : %.6f  (degrees, + = north)" % meta.get("lat", 0.0))
+    a("# Longitude : %.6f  (degrees, + = east)" % meta.get("lon", 0.0))
+    a("# Time zone : %s" % meta.get("tz_desc", ""))
+    a("# Range     : %d days starting %s" % (len(rows), rows[0]["date"].isoformat()))
+    a("# Algorithm : NOAA solar equations (Meeus); sunrise/sunset at zenith")
+    a("#             90.833 deg, which includes atmospheric refraction and")
+    a("#             the solar disc radius. Typically within 1-2 minutes of")
+    a("#             published almanac values (real refraction varies).")
+    a("# Times     : local wall clock HH:MM:SS; '--:--:--' means the sun")
+    a("#             never rises / never sets that day (Daylight 00 / 24 h).")
+    a("#")
+    a(TABLE_HEADER)
+    for r in rows:
+        a("%s    %s   %s   %s   %s" % (
+            r["date"].isoformat(), fmt_clock(r["rise"]), fmt_clock(r["set"]),
+            fmt_span(r["day"]), fmt_offset(r["off"])))
+    a("")
+    return "\n".join(out)
+
+
+def parse_table_text(text):
+    """Inverse of build_table_text — tolerant of unknown '#' header lines."""
+    meta = {"location": "", "lat": None, "lon": None,
+            "tz_desc": "", "generated": ""}
+    rows = []
+    for line in text.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith("#"):
+            body = s.lstrip("#").strip()
+            if ":" not in body:
+                continue
+            key, val = body.split(":", 1)
+            key, val = key.strip().lower(), val.strip()
+            if key == "location":
+                meta["location"] = val
+            elif key == "latitude":
+                meta["lat"] = float(val.split()[0])
+            elif key == "longitude":
+                meta["lon"] = float(val.split()[0])
+            elif key == "time zone":
+                meta["tz_desc"] = val
+            elif key == "generated":
+                meta["generated"] = val
+            continue
+        parts = s.split()
+        if len(parts) != 5:
+            raise ValueError("unrecognized data line: %r" % line)
+        rise, set_ = parse_clock(parts[1]), parse_clock(parts[2])
+        day = parse_clock(parts[3])
+        rows.append({"date": dt.date.fromisoformat(parts[0]),
+                     "rise": rise, "set": set_,
+                     "day": 0 if day is None else day,
+                     "off": parse_offset(parts[4])})
+    if not rows:
+        raise ValueError("no data rows found in file")
+    return rows, meta
+
+
+# ----------------------------------------------------------------------------
+# Config persistence — %APPDATA%\Sun2Set\config.json (same pattern as the games)
+# ----------------------------------------------------------------------------
+def _appdata_dir():
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "Sun2Set")
+
+
+def _config_path():
+    return os.path.join(_appdata_dir(), "config.json")
+
+
+def load_config():
+    try:
+        with open(_config_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_config(config):
+    try:
+        os.makedirs(_appdata_dir(), exist_ok=True)
+        with open(_config_path(), "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+    except Exception:
+        pass
+
+
+# ----------------------------------------------------------------------------
+# The app. Sun2Set(root=None) is fully headless: parameters are plain
+# attributes, compute()/save/load never touch Tk — that's what --selftest uses.
+# ----------------------------------------------------------------------------
+class Sun2Set:
+    def __init__(self, root=None, persist=True):
+        self.root = root
+        self.persist = persist
+        self.config = load_config() if persist else {}
+
+        cfg = self.config
+        self.location = str(cfg.get("location", DEFAULT_LOCATION))
+        self.lat = self._cfg_float(cfg, "lat", DEFAULT_LAT, -90.0, 90.0)
+        self.lon = self._cfg_float(cfg, "lon", DEFAULT_LON, -180.0, 180.0)
+        self.tz_mode = cfg.get("tz_mode") if cfg.get("tz_mode") in ("system", "fixed") else "system"
+        self.fixed_hours = self._cfg_float(cfg, "fixed_hours", 10.0, -14.0, 14.0)
+        self.dst_enabled = bool(cfg.get("dst_enabled", False))
+        self.dst_hours = self._cfg_float(cfg, "dst_hours", 11.0, -14.0, 14.0)
+        self.dst_start = self._cfg_rule(cfg, "dst_start", (1, 6, 10))
+        self.dst_end = self._cfg_rule(cfg, "dst_end", (1, 6, 4))
+        self.start = dt.date.today()          # always start "today" on launch
+        self.days = int(self._cfg_float(cfg, "days", DEFAULT_DAYS, 1, 1500))
+
+        self.rows = []                        # computed / loaded almanac rows
+        self.meta = {}                        # assumptions that produced them
+        self.table_text = ""                  # the text-file content
+        self.canvas = None                    # set only when a GUI exists
+        self._plot = None                     # graph geometry for hover lookups
+
+        if root is not None:
+            self._build_gui()
+            self._on_calculate()              # show results immediately
+
+    @staticmethod
+    def _cfg_float(cfg, key, default, lo, hi):
+        try:
+            v = float(cfg.get(key, default))
+            return v if lo <= v <= hi else default
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _cfg_rule(cfg, key, default):
+        try:
+            o, w, m = (int(v) for v in cfg.get(key))
+            if o in ORD_NAMES and 0 <= w <= 6 and 1 <= m <= 12:
+                return (o, w, m)
+        except (TypeError, ValueError):
+            pass
+        return default
+
+    # ---------------------------------------------------------- computation
+    def compute(self):
+        """Fill rows / meta / table_text from the current parameters."""
+        dst = None
+        if self.tz_mode == "fixed" and self.dst_enabled:
+            dst = {"hours": self.dst_hours,
+                   "start": self.dst_start, "end": self.dst_end}
+        self.rows = compute_rows(self.lat, self.lon, self.start, self.days,
+                                 self.tz_mode, self.fixed_hours, dst)
+        if self.tz_mode == "system":
+            names = " / ".join(n for n in time.tzname if n)
+            tz_desc = ("System local zone (%s) - DST aware; each day's "
+                       "offset is in the UTCoff column" % names)
+        elif dst:
+            # Keep everything essential before the ';' — the graph subtitle
+            # shows only the part up to it.
+            tz_desc = ("Fixed UTC offset %s with DST %s from %s to %s; "
+                       "each day's offset is in the UTCoff column"
+                       % (fmt_offset(int(round(self.fixed_hours * 60))),
+                          fmt_offset(int(round(self.dst_hours * 60))),
+                          fmt_rule(self.dst_start), fmt_rule(self.dst_end)))
+        else:
+            tz_desc = ("Fixed UTC offset %s (no daylight-saving adjustments)"
+                       % fmt_offset(int(round(self.fixed_hours * 60))))
+        self.meta = {
+            "generated": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "location": self.location, "lat": self.lat, "lon": self.lon,
+            "tz_desc": tz_desc,
+        }
+        self.table_text = build_table_text(self.rows, self.meta)
+
+    def autosave(self):
+        """Write the latest table next to the config; returns the path."""
+        if not self.persist:
+            return None
+        path = os.path.join(_appdata_dir(), "sun2set_latest.txt")
+        os.makedirs(_appdata_dir(), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(self.table_text)
+        return path
+
+    def save_text_file(self, path):
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(self.table_text)
+
+    def load_text_file(self, path):
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        rows, meta = parse_table_text(text)   # raises ValueError on bad files
+        self.rows, self.meta, self.table_text = rows, meta, text
+        if meta.get("lat") is not None:
+            self.lat = meta["lat"]
+        if meta.get("lon") is not None:
+            self.lon = meta["lon"]
+        if meta.get("location"):
+            self.location = meta["location"]
+        return len(rows)
+
+    # ------------------------------------------------------------------ GUI
+    def _build_gui(self):
+        root = self.root
+        root.title("Sun2Set — sunrise & sunset almanac")
+        root.configure(bg=BG)
+        root.resizable(False, False)
+
+        panel = tk.Frame(root, bg=PANEL_BG, width=PANEL_W,
+                         highlightbackground=PANEL_EDGE, highlightthickness=1)
+        panel.pack(side="left", fill="y", padx=(10, 6), pady=10)
+        panel.pack_propagate(False)
+
+        tk.Label(panel, text="Sun2Set", bg=PANEL_BG, fg=GOLD,
+                 font=(FONT, 18, "bold")).pack(anchor="w", padx=12, pady=(12, 0))
+        tk.Label(panel, text="sunrise · sunset · day length", bg=PANEL_BG,
+                 fg=SUBTEXT, font=(FONT, 9)).pack(anchor="w", padx=12)
+
+        self._section(panel, "LOCATION")
+        self.loc_entry = self._entry_row(panel, "Name", self.location)
+        self.lat_entry = self._entry_row(panel, "Latitude", "%.4f" % self.lat)
+        self.lon_entry = self._entry_row(panel, "Longitude", "%.4f" % self.lon)
+        tk.Label(panel, text="degrees: + = north / east", bg=PANEL_BG,
+                 fg=SUBTEXT, font=(FONT, 8)).pack(anchor="w", padx=12)
+
+        self._section(panel, "TIME ZONE")
+        self.tz_var = tk.StringVar(master=root, value=self.tz_mode)
+        for value, label in (("system", "System zone (DST aware)"),
+                             ("fixed", "Fixed UTC offset (hours):")):
+            tk.Radiobutton(panel, text=label, value=value, variable=self.tz_var,
+                           command=self._on_tz_mode, bg=PANEL_BG, fg=TEXT,
+                           selectcolor=BTN_BG, activebackground=PANEL_BG,
+                           activeforeground=TEXT, font=(FONT, 10),
+                           anchor="w").pack(fill="x", padx=10)
+        self.tz_entry = self._entry_row(panel, "Offset",
+                                        "%g" % self.fixed_hours, width=8)
+        tk.Label(panel, text="e.g. 10, -3.5 or 9:30", bg=PANEL_BG,
+                 fg=SUBTEXT, font=(FONT, 8)).pack(anchor="w", padx=12)
+        self.dst_on_var = tk.BooleanVar(master=root, value=self.dst_enabled)
+        self.dst_check = tk.Checkbutton(
+            panel, text="with daylight saving:", variable=self.dst_on_var,
+            command=self._on_tz_mode, bg=PANEL_BG, fg=TEXT, selectcolor=BTN_BG,
+            activebackground=PANEL_BG, activeforeground=TEXT, font=(FONT, 10),
+            anchor="w", disabledforeground="#565670")
+        self.dst_check.pack(fill="x", padx=10)
+        self._dst_menus = []
+        self.dst_entry = self._entry_row(panel, "DST offs.",
+                                         "%g" % self.dst_hours, width=8)
+        self.dst_start_vars = self._rule_row(panel, "starts", self.dst_start)
+        self.dst_end_vars = self._rule_row(panel, "ends", self.dst_end)
+
+        self._section(panel, "RANGE")
+        self.date_entry = self._entry_row(panel, "Start", self.start.isoformat())
+        self.days_entry = self._entry_row(panel, "Days", str(self.days))
+
+        self._button(panel, "CALCULATE", self._on_calculate,
+                     primary=True).pack(fill="x", padx=12, pady=(18, 4))
+        row = tk.Frame(panel, bg=PANEL_BG)
+        row.pack(fill="x", padx=12, pady=2)
+        self._button(row, "SAVE AS…", self._on_save).pack(
+            side="left", expand=True, fill="x", padx=(0, 3))
+        self._button(row, "LOAD…", self._on_load).pack(
+            side="left", expand=True, fill="x", padx=(3, 0))
+
+        self.status = tk.Label(panel, text="", bg=PANEL_BG, fg=SUBTEXT,
+                               font=(FONT, 9), wraplength=PANEL_W - 28,
+                               justify="left", anchor="nw")
+        self.status.pack(fill="both", expand=True, padx=12, pady=(10, 12))
+
+        right = tk.Frame(root, bg=BG)
+        right.pack(side="left", fill="both", padx=(0, 10), pady=10)
+        tabs = tk.Frame(right, bg=BG)
+        tabs.pack(fill="x")
+        self.tab_btns = {}
+        for key, label in (("graph", "GRAPH"), ("table", "TABLE")):
+            b = self._button(tabs, label, lambda k=key: self._show_tab(k))
+            b.pack(side="left", padx=(0, 6), pady=(0, 6), ipadx=14)
+            self.tab_btns[key] = b
+        tk.Label(tabs, text="hover the graph for exact values", bg=BG,
+                 fg=SUBTEXT, font=(FONT, 9)).pack(side="right")
+
+        container = tk.Frame(right, bg=BG, width=GRAPH_W + 2, height=GRAPH_H + 2)
+        container.pack()
+        container.grid_propagate(False)
+        container.rowconfigure(0, weight=1)
+        container.columnconfigure(0, weight=1)
+
+        # The canvas lives in its own frame: Canvas.tkraise() raises canvas
+        # *items*, not the widget, so tab switching must raise plain Frames.
+        graph_frame = tk.Frame(container, bg=BG)
+        graph_frame.grid(row=0, column=0, sticky="nsew")
+        self.canvas = tk.Canvas(graph_frame, width=GRAPH_W, height=GRAPH_H,
+                                bg=BG, highlightthickness=1,
+                                highlightbackground=PANEL_EDGE)
+        self.canvas.pack(fill="both", expand=True)
+        self.canvas.bind("<Motion>", self._on_graph_motion)
+        self.canvas.bind("<Leave>", lambda e: self.canvas.delete("hover"))
+
+        table_frame = tk.Frame(container, bg=BG)
+        table_frame.grid(row=0, column=0, sticky="nsew")
+        scroll = tk.Scrollbar(table_frame)
+        scroll.pack(side="right", fill="y")
+        self.table_widget = tk.Text(table_frame, bg=PANEL_BG, fg=TEXT,
+                                    font=(FONT, 10), relief="flat",
+                                    state="disabled", wrap="none",
+                                    yscrollcommand=scroll.set)
+        self.table_widget.pack(side="left", fill="both", expand=True)
+        scroll.configure(command=self.table_widget.yview)
+        self._tab_frames = {"graph": graph_frame, "table": table_frame}
+
+        self._show_tab("graph")
+        self._on_tz_mode()
+        root.bind("<Return>", lambda e: self._on_calculate())
+
+        pos = self.config.get("win_pos")
+        if isinstance(pos, str) and pos.startswith(("+", "-")):
+            try:
+                root.geometry(pos)
+            except tk.TclError:
+                pass
+        root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _section(self, parent, text):
+        tk.Label(parent, text=text, bg=PANEL_BG, fg=GOLD,
+                 font=(FONT, 10, "bold"), anchor="w").pack(
+            fill="x", padx=12, pady=(10, 2))
+
+    def _entry_row(self, parent, label, initial, width=16):
+        row = tk.Frame(parent, bg=PANEL_BG)
+        row.pack(fill="x", padx=12, pady=2)
+        tk.Label(row, text=label, bg=PANEL_BG, fg=TEXT, font=(FONT, 10),
+                 width=9, anchor="w").pack(side="left")
+        e = tk.Entry(row, bg=BTN_BG, fg=TEXT, insertbackground=TEXT,
+                     relief="flat", highlightthickness=1,
+                     highlightbackground=BTN_EDGE, highlightcolor=GOLD,
+                     font=(FONT, 10), width=width,
+                     disabledbackground=PANEL_BG)
+        e.insert(0, initial)
+        e.pack(side="left", fill="x", expand=True)
+        return e
+
+    def _button(self, parent, text, cmd, primary=False):
+        return tk.Button(
+            parent, text=text, command=cmd, font=(FONT, 11, "bold"),
+            bg=GOLD if primary else BTN_BG,
+            fg="#101018" if primary else TEXT,
+            activebackground="#ffe763" if primary else "#2a2a3e",
+            activeforeground="#101018" if primary else TEXT,
+            relief="flat", bd=0, highlightthickness=1,
+            highlightbackground=BTN_EDGE, cursor="hand2", pady=6)
+
+    def _rule_row(self, parent, label, rule):
+        """A '1st / Sun / Oct' dropdown triple; returns its three StringVars."""
+        row = tk.Frame(parent, bg=PANEL_BG)
+        row.pack(fill="x", padx=12, pady=1)
+        tk.Label(row, text=label, bg=PANEL_BG, fg=TEXT, font=(FONT, 10),
+                 width=9, anchor="w").pack(side="left")
+        out = []
+        for values, initial in ((list(ORD_NAMES.values()), ORD_NAMES[rule[0]]),
+                                (DAY_NAMES, DAY_NAMES[rule[1]]),
+                                (MONTH_NAMES, MONTH_NAMES[rule[2] - 1])):
+            var = tk.StringVar(master=self.root, value=initial)
+            om = tk.OptionMenu(row, var, *values)
+            om.configure(bg=BTN_BG, fg=TEXT, activebackground="#2a2a3e",
+                         activeforeground=TEXT, relief="flat", bd=0,
+                         highlightthickness=1, highlightbackground=BTN_EDGE,
+                         font=(FONT, 9), width=4, anchor="w",
+                         indicatoron=False, disabledforeground="#565670",
+                         cursor="hand2")
+            om["menu"].configure(bg=BTN_BG, fg=TEXT, font=(FONT, 9),
+                                 activebackground="#2a2a3e",
+                                 activeforeground=TEXT)
+            om.pack(side="left", padx=(0, 3))
+            self._dst_menus.append(om)
+            out.append(var)
+        return out
+
+    @staticmethod
+    def _rule_from_vars(vars_):
+        o, d, m = (v.get() for v in vars_)
+        return (ORD_VALUE[o], DAY_NAMES.index(d), MONTH_NAMES.index(m) + 1)
+
+    def _show_tab(self, key):
+        self._tab_frames[key].tkraise()
+        for k, b in self.tab_btns.items():
+            b.configure(bg="#2a2a3e" if k == key else BTN_BG,
+                        fg=GOLD if k == key else SUBTEXT)
+
+    def _on_tz_mode(self):
+        fixed = self.tz_var.get() == "fixed"
+        self.tz_entry.configure(state="normal" if fixed else "disabled")
+        self.dst_check.configure(state="normal" if fixed else "disabled")
+        dst_on = fixed and self.dst_on_var.get()
+        self.dst_entry.configure(state="normal" if dst_on else "disabled")
+        for om in self._dst_menus:
+            om.configure(state="normal" if dst_on else "disabled")
+
+    def _set_status(self, text, color=SUBTEXT):
+        self.status.configure(text=text, fg=color)
+
+    # ------------------------------------------------------- button actions
+    def _read_form(self):
+        """Entries -> attributes. Returns an error message or None."""
+        try:
+            lat = float(self.lat_entry.get().strip())
+            if not -90.0 <= lat <= 90.0:
+                raise ValueError
+        except ValueError:
+            return "Latitude must be a number in -90..90"
+        try:
+            lon = float(self.lon_entry.get().strip())
+            if not -180.0 <= lon <= 180.0:
+                raise ValueError
+        except ValueError:
+            return "Longitude must be a number in -180..180"
+        tz_mode = self.tz_var.get()
+        fixed, dst_hours = self.fixed_hours, self.dst_hours
+        dst_on = bool(self.dst_on_var.get())
+        dst_start, dst_end = self.dst_start, self.dst_end
+        if tz_mode == "fixed":
+            try:
+                fixed = parse_tz_hours(self.tz_entry.get())
+            except ValueError:
+                return "Fixed offset must look like 10, -3.5 or 9:30 (|h| <= 14)"
+            if dst_on:
+                try:
+                    dst_hours = parse_tz_hours(self.dst_entry.get())
+                except ValueError:
+                    return "DST offset must look like 11, -2.5 or 10:30 (|h| <= 14)"
+                dst_start = self._rule_from_vars(self.dst_start_vars)
+                dst_end = self._rule_from_vars(self.dst_end_vars)
+        try:
+            start = dt.date.fromisoformat(self.date_entry.get().strip())
+        except ValueError:
+            return "Start date must be YYYY-MM-DD"
+        try:
+            days = int(self.days_entry.get().strip())
+            if not 1 <= days <= 1500:
+                raise ValueError
+        except ValueError:
+            return "Days must be a whole number in 1..1500"
+        self.location = self.loc_entry.get().strip()
+        self.lat, self.lon = lat, lon
+        self.tz_mode, self.fixed_hours = tz_mode, fixed
+        self.dst_enabled, self.dst_hours = dst_on, dst_hours
+        self.dst_start, self.dst_end = dst_start, dst_end
+        self.start, self.days = start, days
+        return None
+
+    def _on_calculate(self):
+        err = self._read_form()
+        if err:
+            self._set_status("✗ " + err, ERR_COLOR)
+            return
+        self.compute()
+        self._refresh_views()
+        msg = "✓ Calculated %d days from %s." % (len(self.rows),
+                                                 self.start.isoformat())
+        try:
+            path = self.autosave()
+            if path:
+                msg += "\n\nAutosaved to:\n%s" % path
+        except OSError as e:
+            msg += "\n\n(autosave failed: %s)" % e
+        self._set_status(msg, OK_COLOR)
+
+    def _on_save(self):
+        if not self.rows:
+            self._set_status("✗ Nothing to save — CALCULATE first.", ERR_COLOR)
+            return
+        slug = "".join(c if c.isalnum() else "-" for c in self.location).strip("-")
+        initial = "Sun2Set_%s_%s.txt" % (slug or "data",
+                                         self.rows[0]["date"].isoformat())
+        path = filedialog.asksaveasfilename(
+            parent=self.root, title="Save almanac as…",
+            defaultextension=".txt", initialfile=initial,
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            self.save_text_file(path)
+            self._set_status("✓ Saved %d days to:\n%s" % (len(self.rows), path),
+                             OK_COLOR)
+        except OSError as e:
+            self._set_status("✗ Save failed: %s" % e, ERR_COLOR)
+
+    def _on_load(self):
+        path = filedialog.askopenfilename(
+            parent=self.root, title="Load a saved almanac…",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            n = self.load_text_file(path)
+        except (OSError, ValueError) as e:
+            self._set_status("✗ Load failed: %s" % e, ERR_COLOR)
+            return
+        # reflect the loaded assumptions back into the form
+        for entry, value in ((self.loc_entry, self.location),
+                             (self.lat_entry, "%.4f" % self.lat),
+                             (self.lon_entry, "%.4f" % self.lon),
+                             (self.date_entry, self.rows[0]["date"].isoformat()),
+                             (self.days_entry, str(n))):
+            entry.delete(0, "end")
+            entry.insert(0, str(value))
+        self._refresh_views()
+        self._set_status("✓ Loaded %d days from:\n%s" % (n, path), OK_COLOR)
+
+    def _on_close(self):
+        self.config.update({
+            "win_pos": "+" + self.root.geometry().split("+", 1)[1],
+            "location": self.location, "lat": self.lat, "lon": self.lon,
+            "tz_mode": self.tz_mode, "fixed_hours": self.fixed_hours,
+            "dst_enabled": self.dst_enabled, "dst_hours": self.dst_hours,
+            "dst_start": list(self.dst_start), "dst_end": list(self.dst_end),
+            "days": self.days,
+        })
+        if self.persist:
+            save_config(self.config)
+        self.root.destroy()
+
+    def _refresh_views(self):
+        self.table_widget.configure(state="normal")
+        self.table_widget.delete("1.0", "end")
+        self.table_widget.insert("1.0", self.table_text)
+        self.table_widget.configure(state="disabled")
+        self._draw_graph()
+
+    # ------------------------------------------------------------ the graph
+    def _draw_graph(self):
+        c = self.canvas
+        c.delete("all")
+        self._plot = None
+        rows = self.rows
+        if not rows:
+            c.create_text(GRAPH_W // 2, GRAPH_H // 2, fill=SUBTEXT,
+                          font=(FONT, 12), text="No data — press CALCULATE")
+            return
+
+        L, R, T, B = 64, 16, 64, 40           # margins around the plot area
+        pw, ph = GRAPH_W - L - R, GRAPH_H - T - B
+        n = len(rows)
+
+        def X(i):
+            return L + pw * i / max(1, n - 1)
+
+        def Y(hours):                          # 00:00 bottom … 24:00 top
+            return T + ph * (1.0 - hours / 24.0)
+
+        def clock_h(sec):
+            return (sec % 86400) / 3600.0
+
+        # Shaded daylight band: one polygon per contiguous non-polar run.
+        run = []
+        for i, r in enumerate(rows + [{"rise": None, "set": None}]):
+            if r["rise"] is not None and r["set"] is not None:
+                run.append(i)
+            elif run:
+                if len(run) >= 2:
+                    pts = [(X(i2), Y(clock_h(rows[i2]["rise"]))) for i2 in run]
+                    pts += [(X(i2), Y(clock_h(rows[i2]["set"])))
+                            for i2 in reversed(run)]
+                    c.create_polygon(pts, fill=C_BAND, outline="")
+                run = []
+
+        # Grid: hours (every 2 h) and month boundaries.
+        for h in range(0, 25, 2):
+            y = Y(h)
+            c.create_line(L, y, GRAPH_W - R, y, fill=C_GRID)
+            c.create_text(L - 8, y, anchor="e", fill=SUBTEXT,
+                          font=(FONT, 8), text="%02d:00" % h)
+        for i, r in enumerate(rows):
+            if r["date"].day == 1 and n > 27:
+                x = X(i)
+                c.create_line(x, T, x, T + ph, fill=C_GRID)
+                label = r["date"].strftime("%b")
+                if r["date"].month == 1:
+                    label += "\n" + str(r["date"].year)
+                c.create_text(x, T + ph + 6, anchor="n", fill=SUBTEXT,
+                              font=(FONT, 8), text=label, justify="center")
+        c.create_rectangle(L, T, GRAPH_W - R, T + ph, outline=C_AXIS)
+
+        # Curves, split wherever a value is missing (polar days).
+        def curve(getter, color):
+            seg = []
+            for i, r in enumerate(rows + [{"rise": None, "set": None, "day": None}]):
+                v = getter(r) if i < n else None
+                if v is None:
+                    if len(seg) >= 4:
+                        c.create_line(*seg, fill=color, width=2)
+                    elif len(seg) == 2:
+                        c.create_oval(seg[0] - 1, seg[1] - 1, seg[0] + 1,
+                                      seg[1] + 1, fill=color, outline=color)
+                    seg = []
+                else:
+                    seg += [X(i), Y(v)]
+
+        curve(lambda r: None if r["rise"] is None else clock_h(r["rise"]), C_RISE)
+        curve(lambda r: None if r["set"] is None else clock_h(r["set"]), C_SET)
+        curve(lambda r: None if r["day"] is None else r["day"] / 3600.0, C_DAY)
+
+        # Title + legend.
+        title = self.meta.get("location") or ""
+        lat, lon = self.meta.get("lat"), self.meta.get("lon")
+        if lat is not None and lon is not None:
+            title += "  (%+.4f°, %+.4f°)" % (lat, lon)
+        c.create_text(L, 14, anchor="w", fill=TEXT, font=(FONT, 13, "bold"),
+                      text=title.strip() or "Sun almanac")
+        tz_short = self.meta.get("tz_desc", "").split(";")[0]
+        sub = "%s → %s   ·   %s" % (rows[0]["date"].isoformat(),
+                                    rows[-1]["date"].isoformat(), tz_short)
+        c.create_text(L, 34, anchor="w", fill=SUBTEXT, font=(FONT, 8),
+                      text=sub)
+        lx = GRAPH_W - R
+        for label, color in (("day length", C_DAY), ("sunset", C_SET),
+                             ("sunrise", C_RISE)):
+            t = c.create_text(lx, 52, anchor="e", fill=SUBTEXT,
+                              font=(FONT, 9), text=label)
+            x0 = c.bbox(t)[0]
+            c.create_line(x0 - 24, 52, x0 - 6, 52, fill=color, width=3)
+            lx = x0 - 32
+
+        self._plot = {"L": L, "T": T, "pw": pw, "ph": ph, "n": n}
+
+    def _on_graph_motion(self, ev):
+        p = self._plot
+        c = self.canvas
+        c.delete("hover")
+        if not p or not self.rows:
+            return
+        n = p["n"]
+        i = int(round((ev.x - p["L"]) / p["pw"] * (n - 1))) if n > 1 else 0
+        if not (0 <= i < n and p["L"] - 6 <= ev.x <= p["L"] + p["pw"] + 6):
+            return
+        r = self.rows[i]
+        x = p["L"] + p["pw"] * i / max(1, n - 1)
+        c.create_line(x, p["T"], x, p["T"] + p["ph"], fill="#4a5068",
+                      dash=(2, 3), tags="hover")
+        txt = "%s   rise %s   set %s   day %s   UTC%s" % (
+            r["date"].isoformat(), fmt_clock(r["rise"]), fmt_clock(r["set"]),
+            fmt_span(r["day"]), fmt_offset(r["off"]))
+        tid = c.create_text(p["L"] + 10, p["T"] + 10, anchor="nw", fill=TEXT,
+                            font=(FONT, 10), text=txt, tags="hover")
+        x0, y0, x1, y1 = c.bbox(tid)
+        rect = c.create_rectangle(x0 - 6, y0 - 4, x1 + 6, y1 + 4,
+                                  fill="#161622", outline=PANEL_EDGE,
+                                  tags="hover")
+        c.tag_lower(rect, tid)
+
+
+# ----------------------------------------------------------------------------
+# Self-test (headless — no window). Reference times from published almanacs;
+# tolerances cover refraction-model differences between sources.
+# ----------------------------------------------------------------------------
+def _hms(h, m, s=0):
+    return h * 3600 + m * 60 + s
+
+
+def selftest():
+    print("Sun2Set selftest...")
+
+    # 1. Known sunrise/sunset times (local wall clock at the given offset),
+    #    verified against WolframAlpha; tolerance covers its minute rounding
+    #    plus refraction-model differences between sources.
+    cases = [
+        ("London Jun-21 solstice", 51.5074, -0.1278, 1.0,
+         dt.date(2026, 6, 21), _hms(4, 43), _hms(21, 21), 120),
+        ("Sydney Dec-21 solstice", -33.8688, 151.2093, 11.0,
+         dt.date(2026, 12, 21), _hms(5, 40), _hms(20, 5), 120),
+        ("Reykjavik Dec-21", 64.1466, -21.9426, 0.0,
+         dt.date(2026, 12, 21), _hms(11, 22), _hms(15, 29), 120),
+    ]
+    for label, lat, lon, tzh, date, want_rise, want_set, tol in cases:
+        ev = sun_events(date, lat, lon, tzh)
+        got_rise, got_set = ev["rise"] * 60.0, ev["set"] * 60.0
+        for got, want, what in ((got_rise, want_rise, "rise"),
+                                (got_set, want_set, "set")):
+            assert abs(got - want) <= tol, (
+                "%s %s: got %s, want ~%s" % (label, what, fmt_clock(got),
+                                             fmt_clock(want)))
+    print("  reference sunrise/sunset times OK (%d locations)" % len(cases))
+
+    # 2. Polar night and midnight sun (Longyearbyen, Svalbard, 78.22 N).
+    for date, expect in ((dt.date(2026, 12, 21), "night"),
+                         (dt.date(2026, 6, 21), "day")):
+        ev = sun_events(date, 78.2232, 15.6267, 1.0)
+        assert ev["polar"] == expect and ev["rise"] is None and ev["set"] is None
+        assert ev["daylight"] == (0.0 if expect == "night" else 1440.0)
+    print("  polar night / midnight sun OK")
+
+    # 3. Equinox at the equator: day length just over 12 h (refraction).
+    ev = sun_events(dt.date(2027, 3, 20), 0.0, 0.0, 0.0)
+    d = (ev["set"] - ev["rise"]) * 60.0
+    assert _hms(12, 4) < d < _hms(12, 10), fmt_span(d)
+    print("  equator equinox day length OK (%s)" % fmt_span(d))
+
+    # 4. A full 366-day Sydney batch (fixed offset): internal consistency.
+    rows = compute_rows(-33.8688, 151.2093, dt.date(2026, 7, 3), 366,
+                        "fixed", 10.0)
+    assert len(rows) == 366 and rows[-1]["date"] == dt.date(2027, 7, 3)
+    for a, b in zip(rows, rows[1:]):
+        assert (b["date"] - a["date"]).days == 1
+    for r in rows:
+        assert r["rise"] is not None and r["set"] > r["rise"]
+        assert r["day"] == r["set"] - r["rise"]
+        assert r["off"] == 600
+    hours = [r["day"] / 3600.0 for r in rows]
+    assert 9.4 < min(hours) < 10.2, min(hours)    # shortest ~9h53m (June)
+    assert 14.0 < max(hours) < 14.9, max(hours)   # longest ~14h25m (December)
+    print("  366-day batch consistency OK (day length %.2f..%.2f h)"
+          % (min(hours), max(hours)))
+
+    # 5. System-zone mode runs and yields sane per-day offsets.
+    rows2 = compute_rows(-33.8688, 151.2093, dt.date(2026, 7, 3), 30, "system")
+    assert all(isinstance(r["off"], int) and -14 * 60 <= r["off"] <= 14 * 60
+               for r in rows2)
+    print("  system time-zone mode OK (offset today: %s)"
+          % fmt_offset(rows2[0]["off"]))
+
+    # 6. Manual daylight-saving rules. Sydney law: DST from the 1st Sunday
+    #    of October (inclusive) to the 1st Sunday of April (exclusive).
+    assert nth_weekday_date(2026, 10, 1, 6) == dt.date(2026, 10, 4)
+    assert nth_weekday_date(2027, 4, 1, 6) == dt.date(2027, 4, 4)
+    assert nth_weekday_date(2027, 3, -1, 6) == dt.date(2027, 3, 28)   # last Sun
+    assert nth_weekday_date(2026, 11, 1, 6) == dt.date(2026, 11, 1)   # day 1
+    SYD_DST = {"hours": 11.0, "start": (1, 6, 10), "end": (1, 6, 4)}
+    rows_man = compute_rows(-33.8688, 151.2093, dt.date(2026, 7, 3), 366,
+                            "fixed", 10.0, SYD_DST)
+    offs = {r["date"]: r["off"] for r in rows_man}
+    assert offs[dt.date(2026, 10, 3)] == 600 and offs[dt.date(2026, 10, 4)] == 660
+    assert offs[dt.date(2027, 4, 3)] == 660 and offs[dt.date(2027, 4, 4)] == 600
+    assert offs[dt.date(2026, 7, 3)] == 600 and offs[dt.date(2026, 12, 21)] == 660
+    # Northern-hemisphere rules must not wrap the year end (EU: last Sun of
+    # Mar -> last Sun of Oct; in 2026 that's Mar 29 and Oct 25).
+    EU_DST = {"hours": 1.0, "start": (-1, 6, 3), "end": (-1, 6, 10)}
+    offs_eu = {r["date"]: r["off"] for r in compute_rows(
+        51.5074, -0.1278, dt.date(2026, 1, 1), 365, "fixed", 0.0, EU_DST)}
+    assert offs_eu[dt.date(2026, 3, 28)] == 0 and offs_eu[dt.date(2026, 3, 29)] == 60
+    assert offs_eu[dt.date(2026, 10, 24)] == 60 and offs_eu[dt.date(2026, 10, 25)] == 0
+    assert offs_eu[dt.date(2026, 6, 21)] == 60 and offs_eu[dt.date(2026, 12, 21)] == 0
+    # The user-facing promise: with the right rules, fixed mode reproduces
+    # the system zone exactly (only provable on a Sydney-rules machine).
+    rows_sys = compute_rows(-33.8688, 151.2093, dt.date(2026, 7, 3), 366,
+                            "system")
+    if [r["off"] for r in rows_sys] == [r["off"] for r in rows_man]:
+        assert rows_sys == rows_man
+        print("  manual DST rules reproduce the system zone exactly")
+    else:
+        print("  (system zone here isn't Sydney-like; equivalence check skipped)")
+
+    # 7. Text table round-trip, including polar '--:--:--' rows.
+    meta = {"generated": "2026-07-03 00:00:00", "location": "Testville",
+            "lat": -33.8688, "lon": 151.2093, "tz_desc": "Fixed UTC offset +10:00"}
+    text = build_table_text(rows, meta)
+    rows_b, meta_b = parse_table_text(text)
+    assert rows_b == rows
+    assert abs(meta_b["lat"] - meta["lat"]) < 1e-9
+    assert abs(meta_b["lon"] - meta["lon"]) < 1e-9
+    assert meta_b["location"] == "Testville"
+    rows3 = compute_rows(78.2232, 15.6267, dt.date(2026, 10, 1), 150,
+                         "fixed", 1.0)
+    assert any(r["rise"] is None and r["day"] == 0 for r in rows3)  # polar night
+    text3 = build_table_text(rows3, meta)
+    rows3_b, _ = parse_table_text(text3)
+    assert rows3_b == rows3
+    print("  table text round-trip OK (incl. polar rows)")
+
+    # 8. The fixed-offset entry parser.
+    for s, want in (("10", 10.0), ("+10", 10.0), ("-3.5", -3.5),
+                    ("9:30", 9.5), ("-3:30", -3.5), ("5.75", 5.75), ("0", 0.0)):
+        assert parse_tz_hours(s) == want, s
+    for bad in ("abc", "", "15", "-15", "10:xx"):
+        try:
+            parse_tz_hours(bad)
+            raise AssertionError("parse_tz_hours accepted %r" % bad)
+        except ValueError:
+            pass
+    print("  offset parser OK")
+
+    # 9. Headless app instance: compute + save/load round-trip, no Tk, no
+    #    real config/autosave files (persist=False).
+    import tempfile
+    app = Sun2Set(root=None, persist=False)
+    app.location, app.lat, app.lon = "Testville", 40.0, -75.0
+    app.tz_mode, app.fixed_hours = "fixed", -5.0
+    app.start, app.days = dt.date(2026, 1, 1), 40
+    app.compute()
+    assert app.autosave() is None            # persist=False writes nothing
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "almanac.txt")
+        app.save_text_file(path)
+        app2 = Sun2Set(root=None, persist=False)
+        n = app2.load_text_file(path)
+        assert n == 40 and app2.rows == app.rows
+        assert app2.location == "Testville"
+        assert abs(app2.lat - 40.0) < 1e-9 and abs(app2.lon - -75.0) < 1e-9
+    print("  headless save/load round-trip OK")
+
+    print("All Sun2Set self-tests passed.")
+
+
+def main():
+    if "--selftest" in sys.argv:
+        selftest()
+        return
+    root = tk.Tk()
+    Sun2Set(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
