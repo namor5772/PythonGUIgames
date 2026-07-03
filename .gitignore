@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Sun2Set almanacs saved into the repo folder are user data, never committed
+Sun2Set_*.txt
