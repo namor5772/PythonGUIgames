@@ -76,6 +76,7 @@ PANEL_BG = "#12121c"
 PANEL_EDGE = "#2a2a3a"
 BTN_BG = "#1d1d2c"
 BTN_EDGE = "#3a3a52"
+FOCUS = "#7ec8ff"          # keyboard-focus halo (Tab / Shift-Tab + Enter)
 P1_COLOR = "#ef4444"      # player 1 = red tank
 P2_COLOR = "#3f7fe0"      # player 2 = blue tank
 FONT = "Consolas"
@@ -479,6 +480,10 @@ class PocketTanks:
         self._dirt_row = None
         self._stars = {}
         self.buttons = []               # (x0,y0,x1,y1, action) hit boxes
+        # Keyboard focus tracks the focused button's ACTION string, not an
+        # index — draw() rebuilds self.buttons every frame, so an index
+        # would silently drift whenever buttons appear or disappear.
+        self.focus_action = None
         if root is not None:
             self._build_ui()
             self._tick_scheduled = root.after(FRAME_MS, self.tick)
@@ -513,6 +518,7 @@ class PocketTanks:
         self.winner = None
         self.phase = "aim"
         self.confirm_menu = False
+        self.focus_action = None
         self.ai_plan = None
         self.ai_wait = 30
         self.state = "pick"
@@ -558,6 +564,7 @@ class PocketTanks:
     def _begin_combat(self):
         self.state = "playing"
         self.phase = "aim"
+        self.focus_action = None
         self._set_toast(f"{self.current_tank().name} SHOOTS FIRST")
         self.ai_wait = 45
 
@@ -1148,11 +1155,13 @@ class PocketTanks:
     def request_menu(self):
         if self.state in ("playing", "pick"):
             self.confirm_menu = True
+            self.focus_action = None
         elif self.state == "gameover":
             self.to_menu()
 
     def to_menu(self):
         self.confirm_menu = False
+        self.focus_action = None
         self.state = "menu"
         self.projectiles, self.effects, self.flames = [], [], []
         self._save_settings()
@@ -1398,6 +1407,8 @@ class PocketTanks:
                       font=(FONT, size, "bold"), tags="dyn")
         if enabled:
             self.buttons.append((x0, y0, x1, y1, action))
+            if action == self.focus_action:
+                self._focus_ring(x0, y0, x1, y1)
 
     def _draw_panel(self):
         c = self.canvas
@@ -1445,7 +1456,7 @@ class PocketTanks:
                            fill="#2ecc55", width=0, tags="dyn")
         c.create_text(lx, top + 162, anchor="w",
                       text="keys: ←→ or End/Home angle  ↑↓ power  "
-                           "A/D move  Tab weapon  Space fire",
+                           "A/D move  [ ] weapon  Space fire",
                       fill="#55556a", font=(FONT, 9), tags="dyn")
 
         # --- middle: weapon selector ---------------------------------------
@@ -1497,7 +1508,8 @@ class PocketTanks:
             status = "shot in flight"
         c.create_text(fx + 115, top + 120, text=status, fill=SUBTEXT,
                       font=(FONT, 10, "italic"), tags="dyn")
-        c.create_text(fx + 115, top + 156, text="M mute   Esc menu",
+        c.create_text(fx + 115, top + 156,
+                      text="Tab+Enter buttons   M mute   Esc menu",
                       fill="#55556a", font=(FONT, 9), tags="dyn")
 
     # ------------------------------------------------------------------ menu
@@ -1575,8 +1587,10 @@ class PocketTanks:
         c.create_text(cx, WIN_H - 60, fill="#55556a", font=(FONT, 10),
                       justify="center",
                       text="←→ or End/Home angle   ↑↓ power   A/D move"
-                           "   Tab/[ ] weapon   Space fire   M mute   "
-                           "Esc menu\nEnter/click START to play",
+                           "   [ ] weapon   Space fire   M mute   "
+                           "Esc menu\nTab/Shift-Tab or the arrow keys walk "
+                           "the buttons, Enter presses — or Enter/click "
+                           "START to play",
                       tags="dyn")
 
     # ------------------------------------------------------------------ pick
@@ -1632,9 +1646,12 @@ class PocketTanks:
                           fill=SUBTEXT, font=(FONT, 9), tags="dyn")
             if human_turn:
                 self.buttons.append((x0, y0, x0 + cw, y0 + ch, f"pick:{i}"))
-        hint = ("click the weapon both tanks will use for the whole match"
+                if self.focus_action == f"pick:{i}":
+                    self._focus_ring(x0, y0, x0 + cw, y0 + ch, 14)
+        hint = ("click or Tab+Enter the weapon both tanks will use "
+                "for the whole match"
                 if single else
-                "click a card to draft it — "
+                "click or Tab+Enter a card to draft it — "
                 "you alternate picks with your opponent")
         c.create_text(cx, WIN_H - 40, fill="#55556a", font=(FONT, 10),
                       text=hint, tags="dyn")
@@ -1670,6 +1687,64 @@ class PocketTanks:
         self._button(cx + 20, 285, cx + 160, 320, "NO (N)", "confirmN")
 
     # ----------------------------------------------------------------- input
+    def _focus_ring(self, x0, y0, x1, y1, radius=12):
+        """Halo around the keyboard-focused control."""
+        self._round_rect(x0 - 3, y0 - 3, x1 + 3, y1 + 3, radius,
+                         fill="", outline=FOCUS, width=2, tags="dyn")
+
+    def _focus_move(self, step):
+        """Tab / Shift-Tab: walk the keyboard focus along this frame's
+        buttons in draw order. Focus is the button's action string; when
+        the remembered action is gone (screen changed, button disabled),
+        entry restarts at the first / last button instead of erroring."""
+        if not self.buttons:
+            self.focus_action = None
+            return
+        actions = [b[4] for b in self.buttons]
+        if self.focus_action in actions:
+            i = (actions.index(self.focus_action) + step) % len(actions)
+        else:
+            i = 0 if step >= 0 else len(actions) - 1
+        self.focus_action = actions[i]
+
+    def _focus_spatial(self, direction):
+        """Up/Down (and PgUp/PgDn): move focus to the nearest button in the
+        next row toward `direction` (+1 = down the screen, -1 = up) —
+        nearest by vertical gap first, then by horizontal offset, so grids
+        move column-wise. Wraps at the top/bottom edge. Same-row buttons
+        are Left/Right's job; with nothing focused, enters like Tab."""
+        rects = {b[4]: b for b in self.buttons}
+        cur = rects.get(self.focus_action)
+        if cur is None:
+            self._focus_move(1 if direction > 0 else -1)
+            return
+        cx, cy = (cur[0] + cur[2]) / 2, (cur[1] + cur[3]) / 2
+        ahead, behind = [], []
+        for (x0, y0, x1, y1, action) in self.buttons:
+            if action == self.focus_action:
+                continue
+            dy = ((y0 + y1) / 2 - cy) * direction
+            dx = abs((x0 + x1) / 2 - cx)
+            if dy > 0.5:
+                ahead.append((dy, dx, action))
+            elif dy < -0.5:
+                behind.append((-dy, dx, action))
+        if ahead:
+            self.focus_action = min(ahead)[2]
+        elif behind:                          # screen edge: wrap around to
+            far = max(d for d, _, _ in behind)        # the farthest row,
+            self.focus_action = min(                  # nearest horizontally
+                (dx, a) for d, dx, a in behind if d > far - 0.5)[1]
+
+    def _focus_activate(self):
+        """Enter on the focused button. True when a press was dispatched;
+        False (focus unset or stale) lets Enter keep its legacy meaning."""
+        a = self.focus_action
+        if a and any(b[4] == a for b in self.buttons):
+            self._do_action(a)
+            return True
+        return False
+
     def _on_click(self, ev):
         for (x0, y0, x1, y1, action) in self.buttons:
             if x0 <= ev.x <= x1 and y0 <= ev.y <= y1:
@@ -1731,7 +1806,36 @@ class PocketTanks:
         key = ev.keysym
         if key in ("m", "M"):
             self.sound.toggle_mute()
-            return
+            return None
+        # Keyboard focus, ahead of every state branch so ALL screens (menu,
+        # weapon cards, aim panel, modals) are playable without a mouse.
+        # Shift-Tab arrives as keysym Tab + the shift state bit on Windows
+        # and as ISO_Left_Tab on X11. Returning "break" stops Tk's own
+        # widget-focus traversal from also acting on the Tab press.
+        if key in ("Tab", "ISO_Left_Tab"):
+            back = key == "ISO_Left_Tab" or bool(ev.state & 0x0001)
+            self._focus_move(-1 if back else 1)
+            return "break"
+        if key in ("Return", "KP_Enter") and self._focus_activate():
+            return "break"
+        # The arrow cluster also navigates — everywhere those keys are not
+        # game controls. A human aim turn keeps ←→↑↓/End/Home for angle and
+        # power (Tab/Shift-Tab still walk the panel there).
+        aiming = (self.state == "playing" and self.phase == "aim"
+                  and not self.confirm_menu and not self.current_tank().is_ai)
+        if not aiming:
+            if key in ("Left", "KP_Left", "Home", "KP_Home"):
+                self._focus_move(-1)          # like Shift-Tab
+                return "break"
+            if key in ("Right", "KP_Right", "End", "KP_End"):
+                self._focus_move(1)           # like Tab
+                return "break"
+            if key in ("Up", "KP_Up", "Prior", "KP_Prior"):
+                self._focus_spatial(-1)       # button above (PgUp too)
+                return "break"
+            if key in ("Down", "KP_Down", "Next", "KP_Next"):
+                self._focus_spatial(1)        # button below (PgDn too)
+                return "break"
         if self.confirm_menu:
             if key in ("y", "Y"):
                 self.to_menu()
@@ -1743,10 +1847,6 @@ class PocketTanks:
                 self.start_match()
             elif key in ("1", "2"):
                 self.mode = "1P" if key == "1" else "2P"
-            elif key in ("Left", "Right") and self.mode == "1P":
-                i = AI_LEVEL_NAMES.index(self.ai_level)
-                i = (i + (1 if key == "Right" else -1)) % len(AI_LEVEL_NAMES)
-                self.ai_level = AI_LEVEL_NAMES[i]
             return
         if self.state == "gameover":
             if key in ("r", "R", "Return", "space"):
@@ -1778,7 +1878,7 @@ class PocketTanks:
             self.move_tank(-1)
         elif key in ("d", "D"):
             self.move_tank(1)
-        elif key in ("Tab", "bracketright"):
+        elif key == "bracketright":       # Tab now walks the buttons instead
             self.current_tank().cycle_weapon(1)
             self.sound.play("blip")
         elif key == "bracketleft":
@@ -1913,6 +2013,63 @@ def selftest():
         _assert_terrain_ok(g, f"one-weapon {wkey}")
         print(f"  one-weapon ok: {wkey} x{rounds} — "
               f"{g.tanks[0].score}:{g.tanks[1].score}")
+
+    # 5. Keyboard focus (Tab/Shift-Tab + Enter): pure logic over the
+    #    per-frame buttons list. Focus tracks the ACTION string, because
+    #    draw() rebuilds self.buttons (and its indexes) every frame.
+    g = PocketTanks(root=None, enable_sound=False, persist=False, seed=11)
+    assert g.focus_action is None
+    g._focus_move(1)                       # no buttons: stays unfocused
+    assert g.focus_action is None and not g._focus_activate()
+    g.buttons = [(0, 0, 1, 1, "a"), (0, 0, 1, 1, "b"), (0, 0, 1, 1, "c")]
+    g._focus_move(1)
+    assert g.focus_action == "a"           # Tab enters at the first button
+    g._focus_move(1)
+    g._focus_move(1)
+    assert g.focus_action == "c"
+    g._focus_move(1)
+    assert g.focus_action == "a"           # wraps forward
+    g._focus_move(-1)
+    assert g.focus_action == "c"           # wraps backward
+    g.focus_action = None
+    g._focus_move(-1)
+    assert g.focus_action == "c"           # Shift-Tab enters at the last
+    g.focus_action = "gone"                # stale focus (screen changed)
+    assert not g._focus_activate()         # Enter on stale focus: no-op...
+    g._focus_move(1)
+    assert g.focus_action == "a"           # ...and Tab recovers cleanly
+    g.confirm_menu = True
+    g.buttons = [(0, 0, 1, 1, "confirmY"), (0, 0, 1, 1, "confirmN")]
+    g.focus_action = "confirmN"
+    assert g._focus_activate() and g.confirm_menu is False
+    g.buttons = []
+    g._focus_move(1)
+    assert g.focus_action is None          # empty screens drop the focus
+    g.focus_action = "x"
+    g.start_match()
+    assert g.focus_action is None          # screen changes drop stale focus
+    # Spatial moves (Up/Down, PgUp/PgDn) hop rows column-wise and wrap.
+    g.buttons = [(0, 0, 10, 10, "tl"), (20, 0, 30, 10, "tr"),
+                 (0, 20, 10, 30, "bl"), (20, 20, 30, 30, "br")]
+    g.focus_action = "tl"
+    g._focus_spatial(1)
+    assert g.focus_action == "bl"          # down stays in the column
+    g._focus_spatial(1)
+    assert g.focus_action == "tl"          # wraps bottom -> top
+    g._focus_spatial(-1)
+    assert g.focus_action == "bl"          # up wraps top -> bottom
+    g.focus_action = "br"
+    g._focus_spatial(-1)
+    assert g.focus_action == "tr"          # right column stays right
+    g.focus_action = None
+    g._focus_spatial(1)
+    assert g.focus_action == "tl"          # unfocused: enters like Tab
+    g.buttons = [(0, 0, 10, 10, "a"), (20, 0, 30, 10, "b")]
+    g.focus_action = "a"
+    g._focus_spatial(1)
+    assert g.focus_action == "a"           # single row: vertical is a no-op
+    print("  keyboard focus ok (Tab order, wrap, spatial rows, "
+          "stale-focus safety)")
 
     print("All selftests passed.")
 

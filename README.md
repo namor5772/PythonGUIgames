@@ -183,6 +183,12 @@ opponent!)
   away.
 - **Synthesized sound** and a **control panel** where everything (angle, power,
   movement, weapon select, FIRE) is clickable with the mouse too.
+- **Fully mouse-free** — every button on every screen (menu, weapon cards,
+  aim panel, modals) is reachable with **Tab / Shift-Tab** or the **arrow
+  keys** (←/→/Home/End step through, ↑/↓/PgUp/PgDn jump to the button
+  above/below — the weapon grid moves column-wise) and pressed with
+  **Enter**; a light-blue halo shows the focus. During your aim turn the
+  arrows keep doing angle/power, so use Tab there.
 
 ### Controls (MyPocketTanks)
 
@@ -190,7 +196,9 @@ opponent!)
 | --- | --- | --- | --- |
 | ← / → | Turret angle (Shift = ×5) | ↑ / ↓ | Power (Shift = ×5) |
 | End / Home | Angle up / down (Shift = ×5) | A / D | Drive tank (uses fuel) |
-| Tab / `[` `]` | Cycle weapon | Space / Enter | **FIRE** |
+| `[` `]` | Cycle weapon | Space / Enter | **FIRE** |
+| Tab / Shift-Tab | Walk the buttons (any screen) | Enter | Press the focused button |
+| ← → / Home / End | Previous / next button (menus, cards & dialogs) | ↑ ↓ / PgUp / PgDn | Button above / below (grids move column-wise) |
 | M | Mute / unmute | Esc | Back to menu (asks first) |
 | R | Rematch (after game over) | | |
 
@@ -198,7 +206,7 @@ Config (window position, last mode, AI level, match style, one-weapon round
 count and last weapon) persists in `%APPDATA%\MyPocketTanks\config.json`
 (macOS/Linux: `~/MyPocketTanks/`), and `--selftest` fires every weapon
 headlessly plus plays full AI-vs-AI matches at every difficulty, including
-one-weapon matches.
+one-weapon matches and the keyboard-focus model.
 
 ## Sun2Set
 

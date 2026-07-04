@@ -60,6 +60,25 @@ headless — `step()` is pure logic driven by `--selftest`; `tick()` = `step()` 
   repaints are slow — avoid per-frame).
 - **Weapons are data** (`WEAPONS` list) + a `kind` the projectile engine
   dispatches on in `_impact`/`_detonate`. New weapon = new dict + a branch.
+- **Keyboard focus:** `self.buttons` (the clickable hit boxes) is rebuilt by
+  every `draw()`, so focus tracks the button's *action string*
+  (`focus_action`), never an index. Tab/Shift-Tab walk that list in draw
+  order (`_focus_move`), Enter presses (`_focus_activate`, falling through
+  to Enter's legacy meaning — fire/start/rematch — when nothing is
+  focused), and `_button`/`_draw_pick` render a `FOCUS` halo. Handled at
+  the top of `_on_key` (returning "break" to stop Tk's own Tab traversal)
+  so it works in every state including the confirm modal; screen
+  transitions clear `focus_action`. Weapon cycling is `[`/`]` only — Tab
+  was repurposed; don't rebind it.
+- **Arrow-cluster navigation:** ←/Home = Shift-Tab, →/End = Tab, and
+  ↑/PgUp / ↓/PgDn move *spatially* (`_focus_spatial`: nearest row above/
+  below by vertical gap then horizontal offset, wrapping at the edges —
+  that's what makes the 5×4 card grid move column-wise; same-row buttons
+  are left/right's job, so vertical moves on a one-row screen are no-ops).
+  Gated by an `aiming` check: during a human aim turn the arrow keys stay
+  angle/power controls and only Tab navigates. This replaced the menu's
+  old hidden Left/Right-cycles-AI-level shortcut (AI buttons are directly
+  navigable now); `1`/`2` mode shortcuts survive.
 - **Scoring is Pocket-Tanks style:** no health; damage dealt = points, self
   damage scores for the opponent. Damage-over-time (napalm) must be budgeted
   (see `_spawn_flames`) or scores explode.
