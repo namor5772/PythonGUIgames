@@ -84,9 +84,15 @@ window.
 | Z / Ctrl | Rotate counter-clockwise | M | Mute / unmute |
 | Enter | Start (from menu) | Esc | Back to menu (asks first) / quit |
 | R | Restart / retry | | |
+| Tab / Shift-Tab | Walk the buttons (menus & dialogs) | Enter | Press the focused button |
+| ← → / Home / End | Previous / next button | ↑ ↓ / PgUp / PgDn | Button above / below |
 
-On the **start menu**: ↑ ↓ (or ← →) change the difficulty, **`[`** / **`]`**
-lower / raise the speed ramp, and **Enter** starts.
+On the **start menu** every control is a real button — pick a difficulty,
+nudge the speed ramp with the **−/+** buttons (or **`[`** / **`]`**), and
+START — reachable with **Tab / Shift-Tab or the arrow keys** (a light-blue
+halo shows the focus), pressed with **Enter**, or simply clicked. The same
+goes for the pause, confirm and game-over dialogs; during play the arrows
+are piece controls as ever.
 
 ## MyTetris
 
@@ -110,16 +116,18 @@ mechanics:
 
 ### Game flow & quality-of-life
 
-- **Start menu** — choose a difficulty before each game; ← / → change the
-  selection, **Enter** starts.
+- **Start menu** — choose a difficulty before each game from a button list
+  (keyboard-navigable with Tab/arrows + Enter, or clickable); **Enter** with
+  nothing focused still starts straight away.
 - **Difficulty levels:**
   - *Easy* — slower base fall, gentle start.
   - *Normal* — standard base fall speed.
   - *Hard* — starts at **level 5**, faster base fall, and a **×1.25** score
     multiplier.
 - **Adjustable speed ramp** — how quickly gravity speeds up as you level is a
-  separate setting you control right on the **start menu**: press **`[`** and
-  **`]`** to lower or raise the **SPEED RAMP** value (range `0.20`–`1.00`). `1.0`
+  separate setting you control right on the **start menu**: the **−/+**
+  buttons (or **`[`** and **`]`**) lower / raise the **SPEED** value (range
+  `0.20`–`1.00`). `1.0`
   is the classic Tetris ramp; **lower means a gentler per-level speed-up and much
   longer games** (default `0.50`). It applies to every difficulty and is **saved
   to `config.json`**, so your choice is restored automatically next time.

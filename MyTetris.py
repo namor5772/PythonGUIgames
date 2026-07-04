@@ -64,6 +64,10 @@ PANEL_CELL = "#15151f"
 TEXT = "#e6e6ec"
 SUBTEXT = "#9a9ab0"
 GOLD = "#ffd91a"
+BTN_BG = "#1d1d2c"
+BTN_EDGE = "#3a3a52"
+FOCUS = "#7ec8ff"   # keyboard-focus halo (Tab / arrows + Enter), as in
+                    # MyPocketTanks
 
 COLORS = {
     "I": "#19d3da", "J": "#3f63e0", "L": "#ff9f1a", "O": "#ffd91a",
@@ -410,6 +414,11 @@ class TetrisGame:
         self._toast_text = ""
         self._toast_frames = 0
         self.held = set()
+        self.buttons = []               # (x0,y0,x1,y1, action) hit boxes
+        # Keyboard focus tracks the focused button's ACTION string, not an
+        # index — render() rebuilds self.buttons every frame (same model as
+        # MyPocketTanks).
+        self.focus_action = None
         self.state = "menu"
         self._build_ui()
         self._restore_window_position()
@@ -778,49 +787,199 @@ class TetrisGame:
         self._save_window_position()
         self.root.destroy()
 
+    # ----- buttons & keyboard focus (same model as MyPocketTanks) -----------
+    def _round_rect(self, x0, y0, x1, y1, radius=10, **kw):
+        """Rounded rectangle via the classic smoothed-polygon trick."""
+        r = min(radius, (x1 - x0) / 2, (y1 - y0) / 2)
+        pts = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r,
+               x1, y1 - r, x1, y1, x1 - r, y1, x0 + r, y1,
+               x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
+        return self.canvas.create_polygon(pts, smooth=True, **kw)
+
+    def _button(self, x0, y0, x1, y1, label, action, enabled=True,
+                fill=BTN_BG, fg=TEXT, size=11):
+        c = self.canvas
+        self._round_rect(x0, y0, x1, y1, 10,
+                         fill=fill if enabled else "#15151d",
+                         outline=BTN_EDGE, width=1)
+        c.create_text((x0 + x1) / 2, (y0 + y1) / 2, text=label,
+                      fill=fg if enabled else "#55556a",
+                      font=("Consolas", size, "bold"))
+        if enabled:
+            self.buttons.append((x0, y0, x1, y1, action))
+            if action == self.focus_action:
+                self._focus_ring(x0, y0, x1, y1)
+
+    def _focus_ring(self, x0, y0, x1, y1, radius=12):
+        """Halo around the keyboard-focused control."""
+        self._round_rect(x0 - 3, y0 - 3, x1 + 3, y1 + 3, radius,
+                         fill="", outline=FOCUS, width=2)
+
+    def _focus_move(self, step):
+        """Tab / Shift-Tab (and ←→/Home/End): walk the keyboard focus along
+        this frame's buttons in draw order. Focus is the button's action
+        string; when the remembered action is gone (screen changed), entry
+        restarts at the first / last button instead of erroring."""
+        if not self.buttons:
+            self.focus_action = None
+            return
+        actions = [b[4] for b in self.buttons]
+        if self.focus_action in actions:
+            i = (actions.index(self.focus_action) + step) % len(actions)
+        else:
+            i = 0 if step >= 0 else len(actions) - 1
+        self.focus_action = actions[i]
+
+    def _focus_spatial(self, direction):
+        """Up/Down (and PgUp/PgDn): move focus to the nearest button in the
+        next row toward `direction` (+1 = down the screen, -1 = up) —
+        nearest by vertical gap first, then by horizontal offset. Wraps at
+        the top/bottom edge; same-row buttons are Left/Right's job. With
+        nothing focused, enters like Tab."""
+        rects = {b[4]: b for b in self.buttons}
+        cur = rects.get(self.focus_action)
+        if cur is None:
+            self._focus_move(1 if direction > 0 else -1)
+            return
+        cx, cy = (cur[0] + cur[2]) / 2, (cur[1] + cur[3]) / 2
+        ahead, behind = [], []
+        for (x0, y0, x1, y1, action) in self.buttons:
+            if action == self.focus_action:
+                continue
+            dy = ((y0 + y1) / 2 - cy) * direction
+            dx = abs((x0 + x1) / 2 - cx)
+            if dy > 0.5:
+                ahead.append((dy, dx, action))
+            elif dy < -0.5:
+                behind.append((-dy, dx, action))
+        if ahead:
+            self.focus_action = min(ahead)[2]
+        elif behind:                          # screen edge: wrap around to
+            far = max(d for d, _, _ in behind)        # the farthest row,
+            self.focus_action = min(                  # nearest horizontally
+                (dx, a) for d, dx, a in behind if d > far - 0.5)[1]
+
+    def _focus_activate(self):
+        """Enter on the focused button. True when a press was dispatched;
+        False (focus unset or stale) lets Enter keep its legacy meaning."""
+        a = self.focus_action
+        if a and any(b[4] == a for b in self.buttons):
+            self._do_action(a)
+            return True
+        return False
+
+    def _set_difficulty(self, name):
+        if name != self.difficulty:
+            self.difficulty = name
+            self.diff = DIFFICULTIES[name]  # keep the blurb/BEST in sync
+            self.sound.play("blip")
+
+    def _do_action(self, action):
+        if action.startswith("diff:"):
+            self._set_difficulty(action[5:])
+        elif action == "speed-":
+            self._adjust_speed_step(-SPEED_STEP_INCREMENT)
+        elif action == "speed+":
+            self._adjust_speed_step(+SPEED_STEP_INCREMENT)
+        elif action in ("start", "retry"):
+            self.start_game(self.difficulty)
+        elif action == "resume":
+            self.state = "playing"
+            self.focus_action = None
+        elif action == "pausemenu":
+            self.confirm_menu = True        # ask first, like Esc
+            self.focus_action = None
+        elif action == "menu":
+            self.state = "menu"
+            self.focus_action = None
+        elif action == "confirmY":
+            self.confirm_menu = False
+            self.state = "menu"
+            self.focus_action = None
+        elif action == "confirmN":
+            self.confirm_menu = False
+            self.state = "paused"
+            self.focus_action = None
+
+    def _on_click(self, ev):
+        for (x0, y0, x1, y1, action) in self.buttons:
+            if x0 <= ev.x <= x1 and y0 <= ev.y <= y1:
+                self._do_action(action)
+                return
+
     # ----- input ------------------------------------------------------------
     def on_key_press(self, event):
         key = event.keysym
-        if key in self.held:
-            return
+        if key in self.held:                  # auto-repeat while held
+            return "break" if key in ("Tab", "ISO_Left_Tab") else None
         self.held.add(key)
-        self._handle_press(key, event.char)
+        return self._handle_press(key, event.char, event.state)
 
     def on_key_release(self, event):
         self.held.discard(event.keysym)
 
-    def _handle_press(self, key, char=""):
+    def _handle_press(self, key, char="", state=0):
         if key in ("m", "M"):
             self.sound.toggle_mute()
-            return
+            return None
+        # Keyboard focus, ahead of every state branch: Tab/Shift-Tab walk
+        # this frame's buttons, Enter presses the focused one, and the
+        # arrow cluster (←→/Home/End = prev/next, ↑↓/PgUp/PgDn = spatial)
+        # also navigates on every screen where the arrows are not piece
+        # controls. Shift-Tab is keysym Tab + the shift bit on Windows and
+        # ISO_Left_Tab on X11; "break" stops Tk's own Tab traversal.
+        if key in ("Tab", "ISO_Left_Tab"):
+            back = key == "ISO_Left_Tab" or bool(state & 0x0001)
+            self._focus_move(-1 if back else 1)
+            return "break"
+        if key in ("Return", "KP_Enter") and self._focus_activate():
+            return "break"
+        if self.state in ("menu", "paused", "gameover"):
+            if key in ("Left", "KP_Left", "Home", "KP_Home"):
+                self._focus_move(-1)          # like Shift-Tab
+                return "break"
+            if key in ("Right", "KP_Right", "End", "KP_End"):
+                self._focus_move(1)           # like Tab
+                return "break"
+            if key in ("Up", "KP_Up", "Prior", "KP_Prior"):
+                self._focus_spatial(-1)       # button above (PgUp too)
+                return "break"
+            if key in ("Down", "KP_Down", "Next", "KP_Next"):
+                self._focus_spatial(1)        # button below (PgDn too)
+                return "break"
         if self.state == "menu":
             self._menu_key(key, char)
-            return
+            return None
         if self.state == "gameover":
             if key in ("Return", "KP_Enter"):
                 self.state = "menu"
+                self.focus_action = None
             elif key in ("r", "R"):
                 self.start_game(self.difficulty)
-            return
+            return None
         # playing / paused (with optional confirm-menu modal)
         if self.confirm_menu:
             if key in ("y", "Y", "Return", "KP_Enter"):
                 self.confirm_menu = False
                 self.state = "menu"
+                self.focus_action = None
             elif key in ("n", "N", "Escape"):
                 self.confirm_menu = False
                 self.state = "paused"
-            return
+                self.focus_action = None
+            return None
         if key in ("p", "P"):
             if self.state == "playing":
                 self.state = "paused"
             elif self.state == "paused":
                 self.state = "playing"
-            return
+            self.focus_action = None
+            return None
         if key == "Escape":
             self.confirm_menu = True       # ask before abandoning the game
             self.state = "paused"
-            return
+            self.focus_action = None
+            return None
         if key in ("r", "R"):
             self.start_game(self.difficulty)
             return
@@ -845,16 +1004,11 @@ class TetrisGame:
             self.hold()
 
     def _menu_key(self, key, char=""):
-        idx = DIFFICULTY_NAMES.index(self.difficulty)
+        # Difficulty is picked via the focusable buttons now (arrows/Tab +
+        # Enter, or a click); this handles the remaining menu shortcuts.
         # Speed keys match the typed character too, not just the keysym: on macOS
         # Tk doesn't always report "bracketleft"/"bracketright" for [ and ].
-        if key in ("Up", "Left"):
-            self.difficulty = DIFFICULTY_NAMES[(idx - 1) % len(DIFFICULTY_NAMES)]
-            self.sound.play("blip")
-        elif key in ("Down", "Right"):
-            self.difficulty = DIFFICULTY_NAMES[(idx + 1) % len(DIFFICULTY_NAMES)]
-            self.sound.play("blip")
-        elif key in ("bracketleft", "minus", "KP_Subtract") or char in ("[", "-"):
+        if key in ("bracketleft", "minus", "KP_Subtract") or char in ("[", "-"):
             self._adjust_speed_step(-SPEED_STEP_INCREMENT)   # gentler / longer
         elif key in ("bracketright", "equal", "plus", "KP_Add") or char in ("]", "=", "+"):
             self._adjust_speed_step(+SPEED_STEP_INCREMENT)   # steeper / classic
@@ -897,6 +1051,7 @@ class TetrisGame:
         self.last_kick_index = 0
         self.b2b = False
         self.confirm_menu = False
+        self.focus_action = None
         self.new_best = False
         self._toast_text = ""
         self._toast_frames = 0
@@ -954,6 +1109,7 @@ class TetrisGame:
 
         self.root.bind("<KeyPress>", self.on_key_press)
         self.root.bind("<KeyRelease>", self.on_key_release)
+        self.canvas.bind("<Button-1>", self._on_click)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.focus_set()
 
@@ -983,6 +1139,7 @@ class TetrisGame:
     def render(self):
         c = self.canvas
         c.delete("all")
+        self.buttons = []
         if self.state == "menu":
             self._render_menu()
             self._render_hud()
@@ -1011,23 +1168,34 @@ class TetrisGame:
             if self._toast_frames > 0:
                 c.create_text(COLS * CELL / 2, 3 * CELL, text=self._toast_text,
                               fill=GOLD, font=("Consolas", 16, "bold"))
+        w, h = COLS * CELL, ROWS * CELL
         if self.state == "paused":
             if self.confirm_menu:
                 self._draw_overlay([("RETURN TO MENU?", 22, "#ffffff"),
-                                    ("This game will be lost", 12, SUBTEXT),
-                                    ("Y  Yes        N  No", 13, "#cfcfe0")])
+                                    ("This game will be lost", 12, SUBTEXT)])
+                self._button(w / 2 - 140, h / 2 + 48, w / 2 - 10, h / 2 + 84,
+                             "YES (Y)", "confirmY")
+                self._button(w / 2 + 10, h / 2 + 48, w / 2 + 140, h / 2 + 84,
+                             "NO (N)", "confirmN")
             else:
-                self._draw_overlay([("PAUSED", 26, "#ffffff"),
-                                    ("P  Resume", 13, "#cfcfe0"),
-                                    ("Esc  Menu    R  Retry", 11, SUBTEXT)])
+                self._draw_overlay([("PAUSED", 26, "#ffffff")])
+                for i, (label, action) in enumerate(
+                        [("RESUME (P)", "resume"), ("RETRY (R)", "retry"),
+                         ("MENU (Esc)", "pausemenu")]):
+                    y0 = h / 2 + 28 + i * 44
+                    self._button(w / 2 - 70, y0, w / 2 + 70, y0 + 34,
+                                 label, action)
         elif self.state == "gameover":
             lines = [("GAME OVER", 26, "#ffffff")]
             if self.new_best:
                 lines.append(("★ NEW HIGH SCORE ★", 14, GOLD))
             lines.append((f"Score  {self.score}", 14, TEXT))
             lines.append((f"Best  {self._best(self.difficulty)}", 12, SUBTEXT))
-            lines.append(("ENTER  Menu    R  Retry", 12, "#cfcfe0"))
             self._draw_overlay(lines)
+            self._button(w / 2 - 140, h / 2 + 66, w / 2 - 10, h / 2 + 102,
+                         "RETRY (R)", "retry")
+            self._button(w / 2 + 10, h / 2 + 66, w / 2 + 140, h / 2 + 102,
+                         "MENU", "menu")
         if self.sound.muted or not self.sound.enabled:
             label = "MUTED" if self.sound.enabled else "NO SOUND"
             c.create_text(COLS * CELL - 6, 10, text=label, fill=SUBTEXT,
@@ -1056,36 +1224,49 @@ class TetrisGame:
                       font=("Consolas", 34, "bold"))
         c.create_text(w / 2, 100, text="a classic clone", fill=SUBTEXT,
                       font=("Consolas", 11))
-        c.create_text(w / 2, 162, text="DIFFICULTY", fill=SUBTEXT,
+        c.create_text(w / 2, 138, text="DIFFICULTY", fill=SUBTEXT,
                       font=("Consolas", 12, "bold"))
-        c.create_text(w / 2, 194, text=f"◄  {self.difficulty.upper()}  ►",
-                      fill=COLORS["T"], font=("Consolas", 20, "bold"))
-        c.create_text(w / 2, 222, text=self.diff["blurb"], fill=SUBTEXT,
+        for i, name in enumerate(DIFFICULTY_NAMES):
+            sel = self.difficulty == name
+            y0 = 154 + i * 38
+            self._button(30, y0, w - 30, y0 + 30, name.upper(),
+                         f"diff:{name}",
+                         fill="#26263a" if sel else BTN_BG,
+                         fg=GOLD if sel else TEXT)
+        y = 154 + len(DIFFICULTY_NAMES) * 38 + 8
+        c.create_text(w / 2, y, text=self.diff["blurb"], fill=SUBTEXT,
                       font=("Consolas", 9))
-        c.create_text(w / 2, 248,
-                      text=f"SPEED RAMP   [ {self.speed_step:.2f} ]",
+        y += 30
+        self._button(52, y - 15, 88, y + 15, "-", "speed-",
+                     enabled=self.speed_step > SPEED_STEP_MIN)
+        c.create_text(w / 2, y, text=f"SPEED  {self.speed_step:.2f}",
                       fill=COLORS["I"], font=("Consolas", 13, "bold"))
-        c.create_text(w / 2, 272, text=f"BEST  {self._best(self.difficulty)}",
+        self._button(w - 88, y - 15, w - 52, y + 15, "+", "speed+",
+                     enabled=self.speed_step < SPEED_STEP_MAX)
+        y += 34
+        c.create_text(w / 2, y, text=f"BEST  {self._best(self.difficulty)}",
                       fill=GOLD, font=("Consolas", 16, "bold"))
-        c.create_text(w / 2, 308, text="TOP SCORES", fill=SUBTEXT,
+        y += 30
+        c.create_text(w / 2, y, text="TOP SCORES", fill=SUBTEXT,
                       font=("Consolas", 11, "bold"))
+        y += 22
         entries = self.scores.get(self.difficulty, [])[:5]
-        y = 332
         if entries:
             for i, e in enumerate(entries):
                 c.create_text(w / 2, y,
                               text=f"{i + 1}. {e['score']:>6}  Lv{e['level']} "
                                    f" {e['lines']}L",
                               fill=TEXT, font=("Consolas", 11))
-                y += 22
+                y += 20
         else:
             c.create_text(w / 2, y, text="— none yet —", fill=SUBTEXT,
                           font=("Consolas", 10))
-        c.create_text(w / 2, h - 104, text="ENTER  Start", fill="#ffffff",
-                      font=("Consolas", 14, "bold"))
-        c.create_text(w / 2, h - 76, text="↑↓ Difficulty      [ ] Speed",
+        self._button(60, h - 120, w - 60, h - 78, "S T A R T", "start",
+                     fill="#183822", fg="#7ee08a", size=16)
+        c.create_text(w / 2, h - 56,
+                      text="Tab / arrows navigate    Enter presses",
                       fill=SUBTEXT, font=("Consolas", 10))
-        c.create_text(w / 2, h - 54, text="M  Mute       Esc  Quit",
+        c.create_text(w / 2, h - 38, text="[ ] Speed    M Mute    Esc Quit",
                       fill=SUBTEXT, font=("Consolas", 10))
         if self.sound.muted or not self.sound.enabled:
             label = "MUTED" if self.sound.enabled else "NO SOUND"
@@ -1144,6 +1325,67 @@ def _selftest():
                 game.tick()
                 game.start_game(difficulty)
             game.render()
+
+    # Keyboard navigation (same focus model as MyPocketTanks): buttons are
+    # rebuilt per render; focus tracks the action string; the arrow cluster
+    # navigates everywhere the arrows are not piece controls.
+    game.state = "menu"
+    game.confirm_menu = False
+    game.focus_action = None
+    game.speed_step = SPEED_STEP_DEFAULT   # real config may sit at a limit,
+    game.render()                          # which hides that speed button
+    acts = [b[4] for b in game.buttons]
+    assert acts == [f"diff:{n}" for n in DIFFICULTY_NAMES] + \
+        ["speed-", "speed+", "start"], acts
+    assert game._handle_press("Tab") == "break"
+    assert game.focus_action == f"diff:{DIFFICULTY_NAMES[0]}"
+    game._handle_press("Down")                 # spatial: next difficulty
+    assert game.focus_action == f"diff:{DIFFICULTY_NAMES[1]}"
+    game._handle_press("Return")               # select it (and stay in menu)
+    assert game.state == "menu"
+    assert game.difficulty == DIFFICULTY_NAMES[1]
+    assert game.diff is DIFFICULTIES[game.difficulty]  # blurb stays in sync
+    game._handle_press("Home")                 # Home = previous
+    assert game.focus_action == f"diff:{DIFFICULTY_NAMES[0]}"
+    game._handle_press("Tab", state=0x0001)    # Shift-Tab wraps to the end
+    assert game.focus_action == "start"
+    game._handle_press("Return")
+    assert game.state == "playing"
+    px = game.px
+    game._handle_press("Left")                 # arrows move the PIECE now
+    assert game.px == px - 1 and game.focus_action is None
+    game._handle_press("p")                    # pause overlay buttons
+    game.render()
+    assert [b[4] for b in game.buttons] == ["resume", "retry", "pausemenu"]
+    game._handle_press("Down")
+    game._handle_press("Next")                 # PgDn = down
+    assert game.focus_action == "retry"
+    game._handle_press("Escape")               # confirm modal
+    game.render()
+    assert [b[4] for b in game.buttons] == ["confirmY", "confirmN"]
+    game._handle_press("Right")
+    game._handle_press("End")                  # End = next
+    assert game.focus_action == "confirmN"
+    game._handle_press("Return")
+    assert game.state == "paused" and not game.confirm_menu
+    game.render()                              # click support: press RESUME
+    x0, y0, x1, y1, act = game.buttons[0]
+    assert act == "resume"
+
+    class _Ev:                                 # minimal mouse-event stand-in
+        def __init__(self, x, y):
+            self.x, self.y = x, y
+    game._on_click(_Ev((x0 + x1) // 2, (y0 + y1) // 2))
+    assert game.state == "playing"
+    game.state = "gameover"                    # gameover buttons
+    game.focus_action = None
+    game.render()
+    assert [b[4] for b in game.buttons] == ["retry", "menu"]
+    game._handle_press("ISO_Left_Tab")         # X11 Shift-Tab enters at last
+    assert game.focus_action == "menu"
+    game._handle_press("Return")
+    assert game.state == "menu"
+    print("keyboard/mouse navigation OK: menu, pause, confirm, gameover")
     root.destroy()
     print("selftest OK: all difficulties, no exceptions; "
           f"last run score={game.score}, lines={game.lines}, level={game.level}")

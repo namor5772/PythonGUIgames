@@ -213,6 +213,17 @@ testable headlessly. Preserve it.
 - **Rotation = SRS:** pieces are matrices rotated 90°, then `KICKS_*` wall-kick
   tables are tried in order. T-spin detection needs `last_action_was_rotate` and
   `last_kick_index`, which is why every move/rotate maintains them.
+- **Keyboard focus / buttons:** same model as MyPocketTanks (kept in sync by
+  hand — the games stay single-file, so the ~90-line focus engine is
+  duplicated, not imported): `self.buttons` hit boxes are rebuilt by every
+  `render()`, focus tracks the *action string*, Tab/Shift-Tab +
+  ←→/Home/End walk in draw order, ↑↓/PgUp/PgDn move spatially
+  (`_focus_spatial`), Enter presses via `_do_action`, buttons are also
+  clickable. The arrow cluster navigates only in `menu`/`paused`/`gameover`
+  — during `playing` the arrows are piece controls. The menu's difficulty
+  spinner became a button list; selecting via `_set_difficulty` also updates
+  `self.diff` (the old spinner left it stale, so the menu blurb lagged one
+  pick behind).
 - **Persistence** lives in `%APPDATA%\MyTetris\` (macOS/Linux: `~/MyTetris/`):
   `highscores.json` (top-10 per difficulty) and `config.json` (window position
   **and** the player's `speed_step` speed-ramp setting — one shared dict, so
