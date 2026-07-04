@@ -208,9 +208,9 @@ hemisphere letters (`34.2196 S`), degrees-minutes-seconds
 (`34°13'10.5" S`), or text pasted straight from Wikipedia / Google Maps
 (Unicode minus signs, degree marks and hidden spaces are all handled) —
 choose how the time zone should be handled, and it computes **sunrise,
-sunset — each with its azimuth — and day length for today and every day
-for a year ahead** (366 rows by default; 1–1500 settable, any start
-date).
+sunset — each with its azimuth, true *and* magnetic — and day length for
+today and every day for a year ahead** (366 rows by default; 1–1500
+settable, any start date).
 
 - **Accurate** — NOAA solar-position equations (Jean Meeus), with the solar
   declination and the equation of time re-evaluated *at each event's own
@@ -218,14 +218,20 @@ date).
   values (times *and* azimuths spot-verified against WolframAlpha for
   Sydney, London and Reykjavik). Sunrise/sunset use the standard zenith of
   **90.833°** (atmospheric refraction + the solar disc radius).
-- **Azimuths** — the `RiseAz` / `SetAz` columns give the sun's bearing at
-  each event, in degrees clockwise from **true north** (N=0°, E=90°), i.e.
-  where on your horizon the sun actually appears and disappears — watch the
-  rise point sweep from NE in June to SE in December (Sydney) and cross
-  exactly 90° at the equinoxes. These are *geographic* bearings, as in
-  astronomy apps and maps; a magnetic compass needle reads differently by
-  your local magnetic declination (about 12.5°E in Sydney — subtract it
-  from the table's value to get the needle reading).
+- **Azimuths, true *and* magnetic** — the `RiseAz` / `SetAz` columns give
+  the sun's bearing at each event, in degrees clockwise from **true north**
+  (N=0°, E=90°), i.e. where on your horizon the sun actually appears and
+  disappears — watch the rise point sweep from NE in June to SE in December
+  (Sydney) and cross exactly 90° at the equinoxes. Right beside them,
+  `RiseMag` / `SetMag` give **the number a magnetic compass actually
+  reads**: the app embeds the official **World Magnetic Model (WMM2025,
+  NOAA/BGS)** and applies your location's magnetic declination for *each
+  row's own date* — no hand arithmetic, and the values keep themselves
+  current as the magnetic pole drifts (the file header states the
+  declination used, e.g. `12.3 deg E` around Sydney). Module helpers
+  `magnetic_declination(lat, lon, date)`, `true_to_magnetic(bearing, …)`
+  and `magnetic_to_true(bearing, …)` do one-off conversions in a Python
+  shell. (Compass *deviation* from nearby metal is yours to manage.)
 - **Time zones done honestly** — either your **system zone with DST applied
   per day** from the OS rules (the sunrise/sunset curves show the 1-hour steps
   at each changeover while day length stays smooth), or any **fixed UTC
@@ -249,7 +255,8 @@ date).
   header with the other assumptions.
 - **Graph** — sunrise and sunset curves over a shaded daylight band, a
   day-length curve on the same 24 h axis, month gridlines, and a **hover
-  crosshair** that reads out the exact times and azimuths for any day.
+  crosshair** that reads out the exact times and azimuths for any day
+  (true bearings on the first line, the magnetic compass pair beneath).
 - **Text table** — the same data as a commented text file whose header states
   every assumption (location, latitude, longitude, time-zone handling,
   algorithm, units); view it on the **TABLE** tab, **SAVE AS…** anywhere, and
@@ -257,7 +264,8 @@ date).
   **restores every assumption from the header** — coordinates, time-zone /
   DST settings, skyline and range go back into the form — so a saved file
   regenerates itself with one CALCULATE on any machine (files saved before
-  the azimuth columns existed still load). Every calculation is
+  the magnetic columns existed — or before the azimuth columns — still
+  load). Every calculation is
   also autosaved to `%APPDATA%\Sun2Set\sun2set_latest.txt` (macOS/Linux:
   `~/Sun2Set/`). The Save/Load dialogs open in your Documents folder the
   first time, then remember the folder you last used (persisted).
@@ -270,10 +278,12 @@ The whole session persists in `%APPDATA%\Sun2Set\config.json`: the window
 position, theme, active tab and **every input field exactly as typed** —
 even edits you never calculated — so the app reopens just as you left it.
 `--selftest` checks the solar math against reference almanac times and
-azimuths, polar cases, the manual-DST rule engine (including that it
+azimuths, the magnetic model against the official NOAA/BGS WMM2025 test
+vectors (plus NOAA's online calculator for Sydney, Binda, London and
+Reykjavik), polar cases, the manual-DST rule engine (including that it
 reproduces the system zone exactly), the skyline model (delays, profiles,
 ridge-blocked days), window-position parsing, table round-trips (including
-pre-azimuth legacy files) and save/load — all headlessly.
+pre-azimuth and pre-magnetic legacy files) and save/load — all headlessly.
 
 ## Desktop shortcuts
 
@@ -389,7 +399,7 @@ and creates **`Sun2Set.app`** on your Desktop.
 | --- | --- |
 | `MyTetris.py` | The game — accurate Tetris clone (SRS, 7-bag, DAS, ghost, hold, next-3, T-spins, back-to-back, start menu, difficulty, sound, high scores) plus a headless `--selftest`. |
 | `MyPocketTanks.py` | Artillery duel — weapon draft or one-weapon matches (settable 1–20 rounds), 20 weapons, destructible terrain, wind, fuel-limited movement, AI or hotseat, sound — plus a headless `--selftest`. |
-| `Sun2Set.py` | Bonus non-game — sunrise/sunset almanac: a year of sunrise, sunset and day length for any location (NOAA equations), DST-aware or fixed-offset, graph with hover readout, assumptions-headed text file with Save/Load — plus a headless `--selftest`. |
+| `Sun2Set.py` | Bonus non-game — sunrise/sunset almanac: a year of sunrise, sunset and day length for any location (NOAA equations), azimuths in true *and* magnetic bearings (embedded WMM2025), DST-aware or fixed-offset, graph with hover readout, assumptions-headed text file with Save/Load — plus a headless `--selftest`. |
 | `make_tetris_icon.py` | **Windows icon** — generates `mytetris.ico` by writing the ICO/BMP bytes directly (no Pillow). |
 | `make_pockettanks_icon.py` | **Windows icon** — generates `mypockettanks.ico` (tank, shell arc, explosion, starry sky); reuses `make_tetris_icon.build_ico()`. No Pillow. |
 | `make_sun2set_icon.py` | **Windows icon** — generates `sun2set.ico` (sunset over the sea, with the sun's dotted day-path arc); reuses `make_tetris_icon.build_ico()`. No Pillow. |

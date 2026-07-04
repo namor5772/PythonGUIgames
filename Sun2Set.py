@@ -16,8 +16,12 @@ Features:
     "1st Sun of Apr" at a second offset), which can mirror the system zone
     exactly for any location's local law
   * Sunrise / sunset azimuths — where on the horizon the sun actually
-    appears and disappears (degrees clockwise from TRUE north, E=90;
-    no magnetic declination applied)
+    appears and disappears (degrees clockwise from TRUE north, E=90),
+    plus the matching MAGNETIC compass bearings: the embedded World
+    Magnetic Model (WMM2025) supplies the local declination for each
+    row's own date, so the compass numbers stay current as the magnetic
+    pole drifts (true_to_magnetic / magnetic_to_true do one-off
+    conversions)
   * Polar day / polar night handled ('--:--:--' with 24 h / 0 h daylight)
   * Valley mode: an optional skyline — hills h degrees above the true
     horizon, as one uniform number or an az:alt profile (60:2, 90:6, ...) —
@@ -37,6 +41,7 @@ Run:  python Sun2Set.py          Self-test (headless):  python Sun2Set.py --self
 """
 
 import datetime as dt
+import functools
 import json
 import math
 import os
@@ -293,6 +298,233 @@ def sun_events(date, lat, lon, tz_hours, horizon=None):
     return out
 
 
+# ----------------------------------------------------------------------------
+# Geomagnetism — true vs magnetic bearings. The azimuths above are TRUE
+# (geographic) bearings; a hand-held compass points at MAGNETIC north, which
+# sits several degrees away and drifts as the pole wanders. The World
+# Magnetic Model (NOAA/NCEI + British Geological Survey, public domain) is
+# the standard forecast of that offset — the declination — as a degree-12
+# spherical-harmonic expansion of the whole field. The block below is the
+# official WMM2025 coefficient file verbatim (one row per harmonic: n, m,
+# g, h, gdot, hdot in nT and nT/year; valid 2025.0-2030.0, extrapolated
+# linearly outside). To update circa 2030: paste the next model's .COF over
+# the string and refresh the selftest's official test vectors with it.
+# https://www.ncei.noaa.gov/products/world-magnetic-model
+# ----------------------------------------------------------------------------
+_WMM_COF = """\
+    2025.0            WMM-2025     11/13/2024
+  1  0  -29351.8       0.0       12.0        0.0
+  1  1   -1410.8    4545.4        9.7      -21.5
+  2  0   -2556.6       0.0      -11.6        0.0
+  2  1    2951.1   -3133.6       -5.2      -27.7
+  2  2    1649.3    -815.1       -8.0      -12.1
+  3  0    1361.0       0.0       -1.3        0.0
+  3  1   -2404.1     -56.6       -4.2        4.0
+  3  2    1243.8     237.5        0.4       -0.3
+  3  3     453.6    -549.5      -15.6       -4.1
+  4  0     895.0       0.0       -1.6        0.0
+  4  1     799.5     278.6       -2.4       -1.1
+  4  2      55.7    -133.9       -6.0        4.1
+  4  3    -281.1     212.0        5.6        1.6
+  4  4      12.1    -375.6       -7.0       -4.4
+  5  0    -233.2       0.0        0.6        0.0
+  5  1     368.9      45.4        1.4       -0.5
+  5  2     187.2     220.2        0.0        2.2
+  5  3    -138.7    -122.9        0.6        0.4
+  5  4    -142.0      43.0        2.2        1.7
+  5  5      20.9     106.1        0.9        1.9
+  6  0      64.4       0.0       -0.2        0.0
+  6  1      63.8     -18.4       -0.4        0.3
+  6  2      76.9      16.8        0.9       -1.6
+  6  3    -115.7      48.8        1.2       -0.4
+  6  4     -40.9     -59.8       -0.9        0.9
+  6  5      14.9      10.9        0.3        0.7
+  6  6     -60.7      72.7        0.9        0.9
+  7  0      79.5       0.0       -0.0        0.0
+  7  1     -77.0     -48.9       -0.1        0.6
+  7  2      -8.8     -14.4       -0.1        0.5
+  7  3      59.3      -1.0        0.5       -0.8
+  7  4      15.8      23.4       -0.1        0.0
+  7  5       2.5      -7.4       -0.8       -1.0
+  7  6     -11.1     -25.1       -0.8        0.6
+  7  7      14.2      -2.3        0.8       -0.2
+  8  0      23.2       0.0       -0.1        0.0
+  8  1      10.8       7.1        0.2       -0.2
+  8  2     -17.5     -12.6        0.0        0.5
+  8  3       2.0      11.4        0.5       -0.4
+  8  4     -21.7      -9.7       -0.1        0.4
+  8  5      16.9      12.7        0.3       -0.5
+  8  6      15.0       0.7        0.2       -0.6
+  8  7     -16.8      -5.2       -0.0        0.3
+  8  8       0.9       3.9        0.2        0.2
+  9  0       4.6       0.0       -0.0        0.0
+  9  1       7.8     -24.8       -0.1       -0.3
+  9  2       3.0      12.2        0.1        0.3
+  9  3      -0.2       8.3        0.3       -0.3
+  9  4      -2.5      -3.3       -0.3        0.3
+  9  5     -13.1      -5.2        0.0        0.2
+  9  6       2.4       7.2        0.3       -0.1
+  9  7       8.6      -0.6       -0.1       -0.2
+  9  8      -8.7       0.8        0.1        0.4
+  9  9     -12.9      10.0       -0.1        0.1
+ 10  0      -1.3       0.0        0.1        0.0
+ 10  1      -6.4       3.3        0.0        0.0
+ 10  2       0.2       0.0        0.1       -0.0
+ 10  3       2.0       2.4        0.1       -0.2
+ 10  4      -1.0       5.3       -0.0        0.1
+ 10  5      -0.6      -9.1       -0.3       -0.1
+ 10  6      -0.9       0.4        0.0        0.1
+ 10  7       1.5      -4.2       -0.1        0.0
+ 10  8       0.9      -3.8       -0.1       -0.1
+ 10  9      -2.7       0.9       -0.0        0.2
+ 10 10      -3.9      -9.1       -0.0       -0.0
+ 11  0       2.9       0.0        0.0        0.0
+ 11  1      -1.5       0.0       -0.0       -0.0
+ 11  2      -2.5       2.9        0.0        0.1
+ 11  3       2.4      -0.6        0.0       -0.0
+ 11  4      -0.6       0.2        0.0        0.1
+ 11  5      -0.1       0.5       -0.1       -0.0
+ 11  6      -0.6      -0.3        0.0       -0.0
+ 11  7      -0.1      -1.2       -0.0        0.1
+ 11  8       1.1      -1.7       -0.1       -0.0
+ 11  9      -1.0      -2.9       -0.1        0.0
+ 11 10      -0.2      -1.8       -0.1        0.0
+ 11 11       2.6      -2.3       -0.1        0.0
+ 12  0      -2.0       0.0        0.0        0.0
+ 12  1      -0.2      -1.3        0.0       -0.0
+ 12  2       0.3       0.7       -0.0        0.0
+ 12  3       1.2       1.0       -0.0       -0.1
+ 12  4      -1.3      -1.4       -0.0        0.1
+ 12  5       0.6      -0.0       -0.0       -0.0
+ 12  6       0.6       0.6        0.1       -0.0
+ 12  7       0.5      -0.1       -0.0       -0.0
+ 12  8      -0.1       0.8        0.0        0.0
+ 12  9      -0.4       0.1        0.0       -0.0
+ 12 10      -0.2      -1.0       -0.1       -0.0
+ 12 11      -1.3       0.1       -0.0        0.0
+ 12 12      -0.7       0.2       -0.1       -0.1
+999999999999999999999999999999999999999999999999
+999999999999999999999999999999999999999999999999
+"""
+
+
+@functools.lru_cache(maxsize=1)
+def _wmm_model():
+    """Parse _WMM_COF -> (name, epoch, nmax, {(n, m): (g, h, gdot, hdot)})."""
+    name, epoch, coeffs = "WMM", 2025.0, {}
+    for line in _WMM_COF.splitlines():
+        tok = line.split()
+        if len(tok) == 3 and "." in tok[0]:      # header: epoch, name, date
+            epoch, name = float(tok[0]), tok[1].replace("-", "")
+        elif len(tok) == 6:                      # n  m  g  h  gdot  hdot
+            coeffs[int(tok[0]), int(tok[1])] = tuple(float(v) for v in tok[2:])
+    return name, epoch, max(n for n, _ in coeffs), coeffs
+
+
+def _decimal_year(date):
+    y0 = dt.date(date.year, 1, 1).toordinal()
+    days_in_year = dt.date(date.year + 1, 1, 1).toordinal() - y0
+    return date.year + (date.toordinal() - y0) / days_in_year
+
+
+@functools.lru_cache(maxsize=4096)
+def _wmm_declination(lat, lon, dyear, alt_km):
+    """Evaluate the WMM: declination in degrees (+ = magnetic north lies
+    east of true north) at geodetic lat/lon, a decimal year, and km above
+    the WGS84 ellipsoid.
+
+    The standard evaluation from the WMM technical report: convert to
+    geocentric spherical coordinates, sum the Schmidt semi-normalized
+    harmonic series for the field vector (Gauss coefficients advanced
+    linearly from the epoch), rotate the vector back to the geodetic
+    frame, then declination = atan2(east, north). Reproduces the official
+    test values to 0.01 deg (selftest-pinned).
+    """
+    _name, epoch, nmax, coeffs = _wmm_model()
+    t = dyear - epoch
+
+    # Geodetic -> geocentric. The ellipsoid shifts latitude by up to
+    # ~0.2 deg — enough to fail the official test vectors if skipped.
+    a, f = 6378.137, 1.0 / 298.257223563       # WGS84 axis (km), flattening
+    e2 = f * (2.0 - f)
+    phi = math.radians(max(-89.995, min(89.995, lat)))   # pole is singular
+    lam = math.radians(lon)
+    sp, cp = math.sin(phi), math.cos(phi)
+    rc = a / math.sqrt(1.0 - e2 * sp * sp)
+    px = (rc + alt_km) * cp                    # distance from the spin axis
+    pz = (rc * (1.0 - e2) + alt_km) * sp       # height above equator plane
+    r = math.hypot(px, pz)
+    phig = math.atan2(pz, px)                  # geocentric latitude
+    mu, cmu = math.sin(phig), math.cos(phig)
+
+    # Schmidt semi-normalized associated Legendre values P[n][m](sin phig)
+    # and their latitude derivatives, by the classic recursion: each
+    # diagonal term from the previous diagonal, the rest down its column.
+    P = [[0.0] * (nmax + 1) for _ in range(nmax + 1)]
+    dP = [[0.0] * (nmax + 1) for _ in range(nmax + 1)]
+    P[0][0] = 1.0
+    for n in range(1, nmax + 1):
+        for m in range(n + 1):
+            if n == m:
+                k = 1.0 if n == 1 else math.sqrt((2.0 * n - 1.0) / (2.0 * n))
+                P[n][n] = k * cmu * P[n - 1][n - 1]
+                dP[n][n] = k * (cmu * dP[n - 1][n - 1] - mu * P[n - 1][n - 1])
+            else:
+                norm = math.sqrt(float(n * n - m * m))
+                c1 = (2.0 * n - 1.0) / norm
+                c2 = math.sqrt((n - 1.0) ** 2 - m * m) / norm
+                pm2 = P[n - 2][m] if n - 2 >= m else 0.0
+                dpm2 = dP[n - 2][m] if n - 2 >= m else 0.0
+                P[n][m] = c1 * mu * P[n - 1][m] - c2 * pm2
+                dP[n][m] = (c1 * (mu * dP[n - 1][m] + cmu * P[n - 1][m])
+                            - c2 * dpm2)
+
+    # Horizontal field in the geocentric frame: bx = north, by = east.
+    cosl = [math.cos(m * lam) for m in range(nmax + 1)]
+    sinl = [math.sin(m * lam) for m in range(nmax + 1)]
+    ar = 6371.2 / r                            # geomagnetic ref. radius / r
+    arn = ar ** 3                              # (a/r)^(n+2) at n = 1
+    bx = by = bz = 0.0
+    for n in range(1, nmax + 1):
+        for m in range(n + 1):
+            g, h, gdot, hdot = coeffs[n, m]
+            g += t * gdot                      # secular variation
+            h += t * hdot
+            both = g * cosl[m] + h * sinl[m]
+            bx -= arn * both * dP[n][m]
+            by += arn * m * (g * sinl[m] - h * cosl[m]) * P[n][m]
+            bz -= arn * (n + 1.0) * both * P[n][m]
+        arn *= ar
+    by /= cmu
+
+    # North/down rotate through the (geocentric - geodetic) latitude gap;
+    # east is the same axis in both frames. Declination is the compass
+    # angle between the two norths.
+    psi = phig - phi
+    north = bx * math.cos(psi) - bz * math.sin(psi)
+    return math.degrees(math.atan2(by, north))
+
+
+def magnetic_declination(lat, lon, date=None, alt_km=0.0):
+    """Magnetic declination (variation) in degrees at a place and date:
+    how far magnetic north sits east (+) or west (-) of true north.
+    date defaults to today. Local compass deviation (car bodies, fence
+    wire, ore bodies) is beyond any global model and not included."""
+    if date is None:
+        date = dt.date.today()
+    return _wmm_declination(lat, lon, _decimal_year(date), alt_km)
+
+
+def true_to_magnetic(bearing, lat, lon, date=None):
+    """A true-north bearing -> what a magnetic compass reads there/then."""
+    return (bearing - magnetic_declination(lat, lon, date)) % 360.0
+
+
+def magnetic_to_true(bearing, lat, lon, date=None):
+    """A magnetic compass bearing -> the true-north bearing it stands for."""
+    return (bearing + magnetic_declination(lat, lon, date)) % 360.0
+
+
 def system_offset_minutes(date):
     """The OS's UTC offset (minutes) for this local date, DST included.
 
@@ -353,7 +585,9 @@ def compute_rows(lat, lon, start, days, tz_mode="fixed", fixed_hours=0.0,
 
     rise/set are seconds after local midnight (None when polar);
     rise_az/set_az = the sun's azimuth at those events, degrees clockwise
-    from true north (rounded to 0.1 so the text file round-trips exactly);
+    from true north; rise_mag/set_mag = the same bearings for a magnetic
+    compass (the WMM declination at that row's date applied) — all four
+    rounded to 0.1 so the text file round-trips exactly;
     day = physical daylight seconds; off = that day's UTC offset in minutes.
     Both events use the same per-day offset, so 'day' stays physically true
     even across a DST changeover. In fixed mode, dst may be a dict
@@ -372,17 +606,22 @@ def compute_rows(lat, lon, start, days, tz_mode="fixed", fixed_hours=0.0,
             off_min = int(round(fixed_hours * 60.0))
         ev = sun_events(date, lat, lon, off_min / 60.0, horizon)
         if ev["polar"]:
-            rise_s = set_s = rise_az = set_az = None
+            rise_s = set_s = rise_az = set_az = rise_mag = set_mag = None
             day_s = 0 if ev["polar"] == "night" else 86400
         else:
             rise_s = int(round(ev["rise"] * 60.0))
             set_s = int(round(ev["set"] * 60.0))
             rise_az = round(ev["rise_az"], 1)
             set_az = round(ev["set_az"], 1)
+            # % 360 folds the possible round(359.95+) = 360.0 back to 0.0.
+            rise_mag = round(true_to_magnetic(ev["rise_az"], lat, lon, date),
+                             1) % 360.0
+            set_mag = round(true_to_magnetic(ev["set_az"], lat, lon, date),
+                            1) % 360.0
             day_s = set_s - rise_s
         rows.append({"date": date, "rise": rise_s, "rise_az": rise_az,
-                     "set": set_s, "set_az": set_az,
-                     "day": day_s, "off": off_min})
+                     "rise_mag": rise_mag, "set": set_s, "set_az": set_az,
+                     "set_mag": set_mag, "day": day_s, "off": off_min})
     return rows
 
 
@@ -513,8 +752,8 @@ def parse_tz_hours(s):
 # ----------------------------------------------------------------------------
 # The text file: assumptions header + one aligned row per day
 # ----------------------------------------------------------------------------
-TABLE_HEADER = ("# Date        Sunrise   RiseAz   Sunset     SetAz"
-                "   Daylight   UTCoff")
+TABLE_HEADER = ("# Date        Sunrise   RiseAz RiseMag   Sunset     SetAz"
+                "  SetMag   Daylight   UTCoff")
 
 
 def build_table_text(rows, meta):
@@ -540,15 +779,18 @@ def build_table_text(rows, meta):
     a("# Times     : local wall clock HH:MM:SS; '--:--:--' means the sun")
     a("#             never rises / never sets that day (Daylight 00 / 24 h).")
     a("# Azimuths  : RiseAz/SetAz = the sun's bearing at each event, degrees")
-    a("#             clockwise from TRUE north (N=0, E=90, S=180, W=270) --")
-    a("#             geographic, not magnetic; '---' on no-event days.")
+    a("#             clockwise from TRUE north (N=0, E=90, S=180, W=270);")
+    a("#             RiseMag/SetMag = the same bearings as read on a magnetic")
+    a("#             compass; '---' on no-event days.")
+    a("# Magnetic  : %s" % meta.get("mag_desc",
+                                    "declination from the embedded WMM model"))
     a("#")
     a(TABLE_HEADER)
     for r in rows:
-        a("%s    %s  %s   %s  %s   %s   %s" % (
+        a("%s    %s  %s  %s   %s  %s  %s   %s   %s" % (
             r["date"].isoformat(), fmt_clock(r["rise"]), fmt_az(r["rise_az"]),
-            fmt_clock(r["set"]), fmt_az(r["set_az"]),
-            fmt_span(r["day"]), fmt_offset(r["off"])))
+            fmt_az(r["rise_mag"]), fmt_clock(r["set"]), fmt_az(r["set_az"]),
+            fmt_az(r["set_mag"]), fmt_span(r["day"]), fmt_offset(r["off"])))
     a("")
     return "\n".join(out)
 
@@ -634,17 +876,23 @@ def parse_table_text(text):
                 meta["generated"] = val
             continue
         parts = s.split()
-        if len(parts) == 7:
+        if len(parts) == 9:
+            (date_s, rise_s, raz_s, rmag_s,
+             set_s, saz_s, smag_s, day_s, off_s) = parts
+        elif len(parts) == 7:               # pre-magnetic files still load
             date_s, rise_s, raz_s, set_s, saz_s, day_s, off_s = parts
+            rmag_s = smag_s = "---"
         elif len(parts) == 5:               # pre-azimuth files still load
             date_s, rise_s, set_s, day_s, off_s = parts
-            raz_s = saz_s = "---"
+            raz_s = saz_s = rmag_s = smag_s = "---"
         else:
             raise ValueError("unrecognized data line: %r" % line)
         day = parse_clock(day_s)
         rows.append({"date": dt.date.fromisoformat(date_s),
                      "rise": parse_clock(rise_s), "rise_az": parse_az(raz_s),
+                     "rise_mag": parse_az(rmag_s),
                      "set": parse_clock(set_s), "set_az": parse_az(saz_s),
+                     "set_mag": parse_az(smag_s),
                      "day": 0 if day is None else day,
                      "off": parse_offset(off_s)})
     if not rows:
@@ -916,10 +1164,19 @@ class Sun2Set:
         else:
             hz_desc = ("az:alt profile %s (deg; N=0 E=90; linear interp)"
                        % ", ".join("%g:%g" % p for p in profile))
+        # One human-scale declination summary for the header (mid-span);
+        # the RiseMag/SetMag columns themselves use each row's own date.
+        mid = self.start + dt.timedelta(days=self.days // 2)
+        d_mid = magnetic_declination(self.lat, self.lon, mid)
+        mag_desc = ("declination %.1f deg %s (%s at %s): magnetic bearing"
+                    " = true %s %.1f deg"
+                    % (abs(d_mid), "E" if d_mid >= 0 else "W",
+                       _wmm_model()[0], mid.isoformat(),
+                       "-" if d_mid >= 0 else "+", abs(d_mid)))
         self.meta = {
             "generated": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "location": self.location, "lat": self.lat, "lon": self.lon,
-            "tz_desc": tz_desc, "horizon_desc": hz_desc,
+            "tz_desc": tz_desc, "horizon_desc": hz_desc, "mag_desc": mag_desc,
         }
         self.table_text = build_table_text(self.rows, self.meta)
 
@@ -1556,6 +1813,9 @@ class Sun2Set:
             r["date"].isoformat(), event(r["rise"], r["rise_az"]),
             event(r["set"], r["set_az"]),
             fmt_span(r["day"]), fmt_offset(r["off"]))
+        if r["rise_mag"] is not None and r["set_mag"] is not None:
+            txt += ("\nmagnetic compass   rise az %.1f°   set az %.1f°"
+                    % (r["rise_mag"], r["set_mag"]))
         tid = c.create_text(p["L"] + 10, p["T"] + 10, anchor="nw",
                             fill=th["text"], font=(FONT, 10), text=txt,
                             tags="hover")
@@ -1622,7 +1882,61 @@ def selftest():
     print("  equator equinox day length OK (%s, rise az %.1f)"
           % (fmt_span(d), ev["rise_az"]))
 
-    # 4. A full 366-day Sydney batch (fixed offset): internal consistency.
+    # 4. Magnetic declination — the embedded WMM2025 must reproduce the
+    #    official NOAA/BGS test vectors (WMM2025_TestValues.txt ships with
+    #    the model; declination stated to 0.01 deg) across both epochs,
+    #    both test altitudes and some awkward high-latitude points.
+    vectors = [
+        # (decimal year, alt km, lat, lon, declination)
+        (2025.0,   0.0,  80.0,    0.0,   1.28),
+        (2025.0,   0.0,   0.0,  120.0,  -0.16),
+        (2025.0,   0.0, -80.0,  240.0,  68.78),
+        (2025.0, 100.0,  80.0,    0.0,   0.85),
+        (2025.0, 100.0,   0.0,  120.0,  -0.15),
+        (2025.0, 100.0, -80.0,  240.0,  68.21),
+        (2027.5,   0.0,  80.0,    0.0,   2.59),
+        (2027.5,   0.0,   0.0,  120.0,  -0.24),
+        (2027.5,   0.0, -80.0,  240.0,  68.49),
+        (2027.5, 100.0,  80.0,    0.0,   2.16),
+        (2027.5, 100.0,   0.0,  120.0,  -0.23),
+        (2027.5, 100.0, -80.0,  240.0,  67.93),
+        (2025.0,  28.0,  89.0, -121.0, -99.77),    # 1 deg off the pole
+        (2025.0,  48.0,  80.0,  -96.0, -29.91),
+        (2025.0,  18.0,   0.0,   21.0,   1.29),
+        (2025.5,   6.0, -36.0, -137.0,  20.28),
+    ]
+    for dyear, alt, la, lo, want in vectors:
+        got = _wmm_declination(la, lo, dyear, alt)
+        assert abs(got - want) <= 0.01, (dyear, la, lo, got, want)
+    name, epoch, nmax, coeffs = _wmm_model()
+    assert name == "WMM2025" and epoch == 2025.0 and nmax == 12
+    assert len(coeffs) == 90                    # sum(n+1 for n in 1..12)
+    # The date-based wrapper against NOAA's online calculator (same model,
+    # same date 2026-07-04): Sydney, Binda NSW, London, Reykjavik.
+    day = dt.date(2026, 7, 4)
+    assert abs(_decimal_year(day) - 2026.50411) < 1e-5
+    for la, lo, want in ((-33.8688, 151.2093, 12.82083),
+                         (-34.2195833, 149.36625, 12.29126),
+                         (51.5074, -0.1278, 1.16280),
+                         (64.1466, -21.9426, -11.13349)):
+        got = magnetic_declination(la, lo, day)
+        assert abs(got - want) < 0.01, (la, lo, got, want)
+    # true <-> magnetic: inverse pair, wrapping through north (Binda's
+    # declination is ~ +12.3 E, so a true 005 reads as ~ 352.7 magnetic).
+    def angdiff(x, y):
+        return abs((x - y + 180.0) % 360.0 - 180.0)
+    for b in (0.0, 5.0, 63.4, 180.0, 351.9):
+        m = true_to_magnetic(b, -34.2195833, 149.36625, day)
+        assert 0.0 <= m < 360.0
+        back = magnetic_to_true(m, -34.2195833, 149.36625, day)
+        assert angdiff(back, b) < 1e-9, (b, m, back)
+    assert true_to_magnetic(5.0, -34.2195833, 149.36625, day) > 350.0
+    assert magnetic_to_true(352.7, -34.2195833, 149.36625, day) < 10.0
+    d_binda = magnetic_declination(-34.2195833, 149.36625, day)
+    print("  magnetic declination OK (%d official WMM vectors; Binda "
+          "2026-07-04: %+.2f deg)" % (len(vectors), d_binda))
+
+    # 5. A full 366-day Sydney batch (fixed offset): internal consistency.
     rows = compute_rows(-33.8688, 151.2093, dt.date(2026, 7, 3), 366,
                         "fixed", 10.0)
     assert len(rows) == 366 and rows[-1]["date"] == dt.date(2027, 7, 3)
@@ -1636,20 +1950,25 @@ def selftest():
         # between the two events (a fraction of a degree) breaks the symmetry.
         assert 0.0 < r["rise_az"] < 180.0 < r["set_az"] < 360.0
         assert abs(r["rise_az"] + r["set_az"] - 360.0) < 1.5, r
+        # The magnetic columns are the true bearings minus that day's own
+        # declination (each rounded to 0.1 independently).
+        d = magnetic_declination(-33.8688, 151.2093, r["date"])
+        assert angdiff((r["rise_az"] - d) % 360.0, r["rise_mag"]) < 0.11, r
+        assert angdiff((r["set_az"] - d) % 360.0, r["set_mag"]) < 0.11, r
     hours = [r["day"] / 3600.0 for r in rows]
     assert 9.4 < min(hours) < 10.2, min(hours)    # shortest ~9h53m (June)
     assert 14.0 < max(hours) < 14.9, max(hours)   # longest ~14h25m (December)
     print("  366-day batch consistency OK (day length %.2f..%.2f h)"
           % (min(hours), max(hours)))
 
-    # 5. System-zone mode runs and yields sane per-day offsets.
+    # 6. System-zone mode runs and yields sane per-day offsets.
     rows2 = compute_rows(-33.8688, 151.2093, dt.date(2026, 7, 3), 30, "system")
     assert all(isinstance(r["off"], int) and -14 * 60 <= r["off"] <= 14 * 60
                for r in rows2)
     print("  system time-zone mode OK (offset today: %s)"
           % fmt_offset(rows2[0]["off"]))
 
-    # 6. Manual daylight-saving rules. Sydney law: DST from the 1st Sunday
+    # 7. Manual daylight-saving rules. Sydney law: DST from the 1st Sunday
     #    of October (inclusive) to the 1st Sunday of April (exclusive).
     assert nth_weekday_date(2026, 10, 1, 6) == dt.date(2026, 10, 4)
     assert nth_weekday_date(2027, 4, 1, 6) == dt.date(2027, 4, 4)
@@ -1680,7 +1999,7 @@ def selftest():
     else:
         print("  (system zone here isn't Sydney-like; equivalence check skipped)")
 
-    # 7. Raised horizon (valley / hills skyline).
+    # 8. Raised horizon (valley / hills skyline).
     assert abs(_zenith_for_horizon(0.0) - ZENITH_OFFICIAL) < 1e-12
     assert abs(_zenith_for_horizon(10.0) - 80.357) < 0.01  # Bennett ~5.4'+16'
     assert parse_horizon("") == [] and parse_horizon("0") == []
@@ -1725,7 +2044,7 @@ def selftest():
           "%s -> %s)" % (fmt_clock(flat["rise"] * 60),
                          fmt_clock(hills["rise"] * 60)))
 
-    # 8. Text table round-trip, including polar '--:--:--' rows.
+    # 9. Text table round-trip, including polar '--:--:--' rows.
     meta = {"generated": "2026-07-03 00:00:00", "location": "Testville",
             "lat": -33.8688, "lon": 151.2093, "tz_desc": "Fixed UTC offset +10:00"}
     text = build_table_text(rows, meta)
@@ -1737,20 +2056,30 @@ def selftest():
     rows3 = compute_rows(78.2232, 15.6267, dt.date(2026, 10, 1), 150,
                          "fixed", 1.0)
     assert any(r["rise"] is None and r["day"] == 0 for r in rows3)  # polar night
+    assert all(r["rise_mag"] is None and r["set_mag"] is None
+               for r in rows3 if r["rise"] is None)
     text3 = build_table_text(rows3, meta)
     rows3_b, _ = parse_table_text(text3)
     assert rows3_b == rows3
     assert any(" ---" in ln for ln in text3.splitlines()
                if not ln.startswith("#"))   # polar days show '---' azimuths
-    # Files saved before the RiseAz/SetAz columns existed must still load.
+    # Files saved before the RiseMag/SetMag columns existed (7 columns),
+    # and before the azimuth columns (5), must still load.
+    legacy7 = (TABLE_HEADER + "\n"
+               "2026-07-03    07:00:57    63.4   16:57:53   296.6   09:56:56"
+               "   +10:00\n")
+    row_l7 = parse_table_text(legacy7)[0][0]
+    assert row_l7["rise_az"] == 63.4 and row_l7["set_az"] == 296.6
+    assert row_l7["rise_mag"] is None and row_l7["set_mag"] is None
     legacy = (TABLE_HEADER + "\n"
               "2026-07-03    07:00:57   16:57:53   09:56:56   +10:00\n")
     row_l = parse_table_text(legacy)[0][0]
     assert row_l["rise"] == _hms(7, 0, 57) and row_l["off"] == 600
     assert row_l["rise_az"] is None and row_l["set_az"] is None
+    assert row_l["rise_mag"] is None and row_l["set_mag"] is None
     print("  table text round-trip OK (incl. polar rows, legacy files)")
 
-    # 9. The entry parsers: fixed offsets, and coordinates as typed OR as
+    # 10. The entry parsers: fixed offsets, and coordinates as typed OR as
     #    pasted from the web (Unicode minus U+2212, degree marks, hemisphere
     #    letters, DMS). Binda NSW's Wikipedia coordinate is the test case.
     for s, want in (("10", 10.0), ("+10", 10.0), ("-3.5", -3.5),
@@ -1786,7 +2115,7 @@ def selftest():
             pass
     print("  entry parsers OK (incl. web-pasted coordinates)")
 
-    # 10. Window-position parsing (negative coords = monitor left of/above
+    # 11. Window-position parsing (negative coords = monitor left of/above
     #     the primary; a naive split('+') mangles them).
     assert _wm_position("1180x762+208+208") == "+208+208"
     assert _wm_position("800x600-1200+30") == "-1200+30"
@@ -1797,7 +2126,7 @@ def selftest():
     print("  window-position parsing OK; file dialogs default to %s"
           % dialog_dir)
 
-    # 11. Headless app instance: compute + save/load round-trip, no Tk, no
+    # 12. Headless app instance: compute + save/load round-trip, no Tk, no
     #     real config/autosave files (persist=False). Load must restore every
     #     assumption from the header, so the file regenerates itself.
     assert parse_tz_desc("System local zone (AEST) - DST aware; x")["tz_mode"] \

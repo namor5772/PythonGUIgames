@@ -85,6 +85,20 @@ never touch Tk (tk Vars are created only inside `_build_gui`).
   code uses. `--selftest` pins WolframAlpha-verified times (±120 s) *and*
   azimuths (±2°) for London / Sydney / Reykjavik plus polar cases; keep
   those anchors when touching the math.
+- **Geomagnetism is embedded, not fetched:** the official WMM2025 `.COF`
+  coefficient file sits verbatim in `_WMM_COF` (public domain, NOAA/BGS —
+  degree-12 spherical harmonics + linear secular variation).
+  `_wmm_declination` follows the WMM technical report, including the WGS84
+  geodetic→geocentric latitude step (skipping it fails the official
+  vectors); `magnetic_declination(lat, lon, date)` is lru_cached per day,
+  `true_to_magnetic`/`magnetic_to_true` wrap it, and `compute_rows` applies
+  it per row: RiseMag/SetMag = the true azimuth minus *that row's own
+  date's* declination. `--selftest` pins 16 official WMM2025 test vectors
+  (±0.01°) plus NOAA online-calculator declinations (Sydney / Binda /
+  London / Reykjavik, 2026-07-04); the NOAA API used for those anchors is
+  `ngdc.noaa.gov/geomag-web/calculators/calculateDeclination?...&key=zNEw7`.
+  Model refresh circa 2030: paste the next `.COF` over the string and
+  update the selftest vectors in the same change.
 - **DST is resolved per-day, not per-datetime:** `system_offset_minutes(date)`
   asks the OS for the offset at local *noon* (transitions happen ~2–3 AM, so
   noon's offset is in force at both sunrise and sunset). Both events use the
@@ -109,10 +123,11 @@ never touch Tk (tk Vars are created only inside `_build_gui`).
   `parse_table_text` round-trip exactly (selftest-enforced) — Load rebuilds
   the graph from the file alone. Header lines are `# Key : value` (unknown
   keys ignored). Keep the file plain ASCII so it opens cleanly anywhere.
-  Data rows have 7 columns — RiseAz/SetAz sit beside their events, stored
-  rounded to 0.1° so `round(az,1)` → `%6.1f` → `float` is lossless ('---'
-  on polar days); 5-column pre-azimuth files still parse (azimuths None,
-  also selftest-enforced).
+  Data rows have 9 columns — RiseAz/RiseMag and SetAz/SetMag sit beside
+  their events, stored rounded to 0.1° so `round(az,1)` → `%6.1f` →
+  `float` is lossless ('---' on polar days); 7-column pre-magnetic and
+  5-column pre-azimuth files still parse (missing columns None, also
+  selftest-enforced).
   Load also restores the *settings* by inverting the header's descriptive
   lines (`parse_tz_desc`, `parse_horizon_desc`), so a loaded file
   regenerates itself (selftest-enforced) — if you reword the `tz_desc` /
