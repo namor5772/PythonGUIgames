@@ -96,6 +96,12 @@ DEFAULT_DAYS = 366            # today + one full year (inclusive of both ends)
 # 34' standard atmospheric refraction + 16' solar disc radius.
 ZENITH_OFFICIAL = 90.833
 
+# The full disc spans two of those 16' radii. Between "upper limb first
+# touches the horizon line" and "lower limb clears it" the center truly
+# climbs exactly one diameter: both endpoints put a limb on the *same*
+# line, so refraction lifts both equally and cancels out of the difference.
+SUN_DIAMETER = 32.0 / 60.0
+
 
 # ----------------------------------------------------------------------------
 # Solar mathematics (NOAA / Meeus). Pure functions — no Tk, fully testable.
@@ -242,8 +248,11 @@ def sun_events(date, lat, lon, tz_hours, horizon=None):
     horizon). Returns dict with 'rise', 'noon', 'set' as minutes after local
     midnight (rise/set None when the sun never crosses the skyline),
     'rise_az' / 'set_az' = the sun's azimuth at those moments (degrees
-    clockwise from true north, E=90; None with the event), 'polar' in
-    {'', 'night', 'day'} and 'daylight' in minutes.
+    clockwise from true north, E=90; None with the event), 'rise_dur' /
+    'set_dur' = how long the disc takes to cross the line, in minutes
+    (upper-limb touch to lower-limb clear; None with the event, and on
+    grazing days when the disc peeks over but never fully clears), 'polar'
+    in {'', 'night', 'day'} and 'daylight' in minutes.
 
     Each event iterates to its own fixed point: declination and the equation
     of time are re-evaluated at the event's estimated time (this is what
@@ -266,24 +275,43 @@ def sun_events(date, lat, lon, tz_hours, horizon=None):
         _, eot = _solar_coords(jd_at(noon))
         noon = clock_noon(eot)
 
-    out = {"rise": None, "rise_az": None, "noon": noon,
-           "set": None, "set_az": None, "polar": "", "daylight": 0.0}
+    out = {"rise": None, "rise_az": None, "rise_dur": None, "noon": noon,
+           "set": None, "set_az": None, "set_dur": None,
+           "polar": "", "daylight": 0.0}
     decl0, eot0 = _solar_coords(jd_at(noon))
-    flags = []
-    for key, sign in (("rise", -1.0), ("set", 1.0)):
+
+    def solve(sign, dz):
+        """One crossing (sign -1 = morning, +1 = evening) with the sun's
+        center dz degrees above the upper-limb zenith. Returns (time,
+        azimuth, '') converged, or (None, None, flag) when the sun never
+        reaches / never leaves that line this day."""
         decl, eot = decl0, eot0              # start from the noon position
         h = horizon_alt(horizon, 90.0 if sign < 0 else 270.0)
         t = az = None
         for _ in range(3):
-            ha, flag = _hour_angle_deg(lat, decl, _zenith_for_horizon(h))
-            if ha is None:                   # sun never reaches / never leaves
-                flags.append(flag)           # the skyline this day
-                t = az = None
-                break
+            ha, flag = _hour_angle_deg(lat, decl,
+                                       _zenith_for_horizon(h) - dz)
+            if ha is None:
+                return None, None, flag
             az = _sun_azimuth(lat, decl, sign * ha)
             h = horizon_alt(horizon, az)
             t = clock_noon(eot) + sign * 4.0 * ha
             decl, eot = _solar_coords(jd_at(t))
+        return t, az, ""
+
+    flags = []
+    for key, sign in (("rise", -1.0), ("set", 1.0)):
+        t, az, flag = solve(sign, 0.0)       # upper limb on the skyline
+        if t is None:
+            flags.append(flag)
+        else:
+            # Crossing duration: re-solve with the center one diameter
+            # higher (= lower limb on the same line; refraction cancels).
+            # Stays None when the disc never fully clears (grazing days
+            # near the polar circles).
+            t_full, _, _ = solve(sign, SUN_DIAMETER)
+            if t_full is not None:
+                out[key + "_dur"] = sign * (t - t_full)
         out[key] = t
         out[key + "_az"] = az                # converged with t (and skyline)
 
@@ -291,6 +319,7 @@ def sun_events(date, lat, lon, tz_hours, horizon=None):
         flag = flags[0] if flags else "night"
         out["rise"] = out["set"] = None
         out["rise_az"] = out["set_az"] = None
+        out["rise_dur"] = out["set_dur"] = None
         out["polar"] = flag
         out["daylight"] = 0.0 if flag == "night" else 1440.0
     else:
@@ -584,6 +613,9 @@ def compute_rows(lat, lon, start, days, tz_mode="fixed", fixed_hours=0.0,
     """The almanac table: one dict per day with times in seconds.
 
     rise/set are seconds after local midnight (None when polar);
+    rise_dur/set_dur = the disc's horizon-crossing time in whole seconds
+    (upper-limb touch to lower-limb clear; None when there is no event or
+    the disc never fully clears the line — grazing polar-circle days);
     rise_az/set_az = the sun's azimuth at those events, degrees clockwise
     from true north; rise_mag/set_mag = the same bearings for a magnetic
     compass (the WMM declination at that row's date applied) — all four
@@ -607,10 +639,15 @@ def compute_rows(lat, lon, start, days, tz_mode="fixed", fixed_hours=0.0,
         ev = sun_events(date, lat, lon, off_min / 60.0, horizon)
         if ev["polar"]:
             rise_s = set_s = rise_az = set_az = rise_mag = set_mag = None
+            rise_dur = set_dur = None
             day_s = 0 if ev["polar"] == "night" else 86400
         else:
             rise_s = int(round(ev["rise"] * 60.0))
             set_s = int(round(ev["set"] * 60.0))
+            rise_dur = (None if ev["rise_dur"] is None
+                        else int(round(ev["rise_dur"] * 60.0)))
+            set_dur = (None if ev["set_dur"] is None
+                       else int(round(ev["set_dur"] * 60.0)))
             rise_az = round(ev["rise_az"], 1)
             set_az = round(ev["set_az"], 1)
             # % 360 folds the possible round(359.95+) = 360.0 back to 0.0.
@@ -619,8 +656,9 @@ def compute_rows(lat, lon, start, days, tz_mode="fixed", fixed_hours=0.0,
             set_mag = round(true_to_magnetic(ev["set_az"], lat, lon, date),
                             1) % 360.0
             day_s = set_s - rise_s
-        rows.append({"date": date, "rise": rise_s, "rise_az": rise_az,
-                     "rise_mag": rise_mag, "set": set_s, "set_az": set_az,
+        rows.append({"date": date, "rise": rise_s, "rise_dur": rise_dur,
+                     "rise_az": rise_az, "rise_mag": rise_mag,
+                     "set": set_s, "set_dur": set_dur, "set_az": set_az,
                      "set_mag": set_mag, "day": day_s, "off": off_min})
     return rows
 
@@ -640,6 +678,29 @@ def fmt_span(sec):
     """Duration 'HH:MM:SS' — unlike fmt_clock, 24:00:00 stays 24:00:00."""
     s = int(round(sec))
     return "%02d:%02d:%02d" % (s // 3600, s // 60 % 60, s % 60)
+
+
+def fmt_dur(sec):
+    """Crossing duration 'MM:SS' — or 'H:MM:SS' should it ever top an hour
+    (threshold days near the polar circles). None -> '--:--': no event, or
+    the disc never fully clears the horizon line that day."""
+    if sec is None:
+        return "--:--"
+    s = int(round(sec))
+    if s >= 3600:
+        return "%d:%02d:%02d" % (s // 3600, s // 60 % 60, s % 60)
+    return "%02d:%02d" % (s // 60, s % 60)
+
+
+def parse_dur(s):
+    """'MM:SS' or 'H:MM:SS' -> seconds; leading dashes -> None. The 3-part
+    form also covers files from the brief HH:MM:SS duration format."""
+    if s.startswith("--"):
+        return None
+    sec = 0
+    for p in s.split(":"):
+        sec = sec * 60 + int(p)
+    return sec
 
 
 def fmt_offset(minutes):
@@ -752,8 +813,8 @@ def parse_tz_hours(s):
 # ----------------------------------------------------------------------------
 # The text file: assumptions header + one aligned row per day
 # ----------------------------------------------------------------------------
-TABLE_HEADER = ("# Date        Sunrise   RiseAz RiseMag   Sunset     SetAz"
-                "  SetMag   Daylight   UTCoff")
+TABLE_HEADER = ("# Date        Sunrise   RiseDur  RiseAz RiseMag   Sunset"
+                "     SetDur   SetAz  SetMag   Daylight   UTCoff")
 
 
 def build_table_text(rows, meta):
@@ -782,14 +843,21 @@ def build_table_text(rows, meta):
     a("#             clockwise from TRUE north (N=0, E=90, S=180, W=270);")
     a("#             RiseMag/SetMag = the same bearings as read on a magnetic")
     a("#             compass; '---' on no-event days.")
+    a("# Durations : RiseDur/SetDur = how long the disc takes to cross the")
+    a("#             horizon line (upper limb first touches -> lower limb")
+    a("#             clears, reversed at sunset), as MM:SS; '--:--' when")
+    a("#             there is no event or the disc never fully clears the")
+    a("#             line (grazing polar-circle days).")
     a("# Magnetic  : %s" % meta.get("mag_desc",
                                     "declination from the embedded WMM model"))
     a("#")
     a(TABLE_HEADER)
     for r in rows:
-        a("%s    %s  %s  %s   %s  %s  %s   %s   %s" % (
-            r["date"].isoformat(), fmt_clock(r["rise"]), fmt_az(r["rise_az"]),
-            fmt_az(r["rise_mag"]), fmt_clock(r["set"]), fmt_az(r["set_az"]),
+        a("%s    %s  %7s  %s  %s   %s  %7s  %s  %s   %s   %s" % (
+            r["date"].isoformat(), fmt_clock(r["rise"]),
+            fmt_dur(r["rise_dur"]), fmt_az(r["rise_az"]),
+            fmt_az(r["rise_mag"]), fmt_clock(r["set"]),
+            fmt_dur(r["set_dur"]), fmt_az(r["set_az"]),
             fmt_az(r["set_mag"]), fmt_span(r["day"]), fmt_offset(r["off"])))
     a("")
     return "\n".join(out)
@@ -876,23 +944,31 @@ def parse_table_text(text):
                 meta["generated"] = val
             continue
         parts = s.split()
-        if len(parts) == 9:
+        if len(parts) == 11:
+            (date_s, rise_s, rdur_s, raz_s, rmag_s,
+             set_s, sdur_s, saz_s, smag_s, day_s, off_s) = parts
+        elif len(parts) == 9:               # pre-duration files still load
             (date_s, rise_s, raz_s, rmag_s,
              set_s, saz_s, smag_s, day_s, off_s) = parts
+            rdur_s = sdur_s = "--:--"
         elif len(parts) == 7:               # pre-magnetic files still load
             date_s, rise_s, raz_s, set_s, saz_s, day_s, off_s = parts
             rmag_s = smag_s = "---"
+            rdur_s = sdur_s = "--:--"
         elif len(parts) == 5:               # pre-azimuth files still load
             date_s, rise_s, set_s, day_s, off_s = parts
             raz_s = saz_s = rmag_s = smag_s = "---"
+            rdur_s = sdur_s = "--:--"
         else:
             raise ValueError("unrecognized data line: %r" % line)
         day = parse_clock(day_s)
         rows.append({"date": dt.date.fromisoformat(date_s),
-                     "rise": parse_clock(rise_s), "rise_az": parse_az(raz_s),
-                     "rise_mag": parse_az(rmag_s),
-                     "set": parse_clock(set_s), "set_az": parse_az(saz_s),
-                     "set_mag": parse_az(smag_s),
+                     "rise": parse_clock(rise_s),
+                     "rise_dur": parse_dur(rdur_s),
+                     "rise_az": parse_az(raz_s), "rise_mag": parse_az(rmag_s),
+                     "set": parse_clock(set_s),
+                     "set_dur": parse_dur(sdur_s),
+                     "set_az": parse_az(saz_s), "set_mag": parse_az(smag_s),
                      "day": 0 if day is None else day,
                      "off": parse_offset(off_s)})
     if not rows:
@@ -1361,12 +1437,19 @@ class Sun2Set:
         table_frame.grid(row=0, column=0, sticky="nsew")
         scroll = tk.Scrollbar(table_frame)
         scroll.pack(side="right", fill="y")
+        # wrap="none" silently clips long rows at the window edge, and the
+        # RiseDur/SetDur columns pushed rows past 100 chars — so the table
+        # also gets a horizontal scrollbar.
+        hscroll = tk.Scrollbar(table_frame, orient="horizontal")
+        hscroll.pack(side="bottom", fill="x")
         self.table_widget = tk.Text(table_frame, bg=T["panel"], fg=T["text"],
                                     font=(FONT, 10), relief="flat",
                                     state="disabled", wrap="none",
+                                    xscrollcommand=hscroll.set,
                                     yscrollcommand=scroll.set)
         self.table_widget.pack(side="left", fill="both", expand=True)
         scroll.configure(command=self.table_widget.yview)
+        hscroll.configure(command=self.table_widget.xview)
         self._tab_frames = {"graph": graph_frame, "table": table_frame}
 
         self._show_tab(getattr(self, "_current_tab", "graph"))
@@ -1813,6 +1896,9 @@ class Sun2Set:
             r["date"].isoformat(), event(r["rise"], r["rise_az"]),
             event(r["set"], r["set_az"]),
             fmt_span(r["day"]), fmt_offset(r["off"]))
+        if r["rise_dur"] is not None or r["set_dur"] is not None:
+            txt += ("\nhorizon crossing   rise %s   set %s"
+                    % (fmt_dur(r["rise_dur"]), fmt_dur(r["set_dur"])))
         if r["rise_mag"] is not None and r["set_mag"] is not None:
             txt += ("\nmagnetic compass   rise az %.1f°   set az %.1f°"
                     % (r["rise_mag"], r["set_mag"]))
@@ -1863,14 +1949,54 @@ def selftest():
     print("  reference sunrise/sunset times + azimuths OK (%d locations)"
           % len(cases))
 
+    # 1b. Horizon-crossing durations: RiseDur/SetDur = the disc climbing its
+    #     own 32' diameter (SUN_DIAMETER; refraction cancels — both
+    #     endpoints put a limb on the same line). Two independent checks:
+    #     the slant formula — the sun's vertical speed at the horizon is
+    #     15 deg/h * cos(lat) * sin(azimuth), so duration ~ diameter/speed
+    #     (runs a few % long at Reykjavik, where the azimuth drifts
+    #     visibly across an 11-minute crossing) — and pinned values.
+    for label, lat, lon, tzh, date, *_ in cases:
+        ev = sun_events(date, lat, lon, tzh)
+        for what, dur, az in (("rise", ev["rise_dur"], ev["rise_az"]),
+                              ("set", ev["set_dur"], ev["set_az"])):
+            assert dur is not None, (label, what)
+            rate = (15.0 * math.cos(math.radians(lat))
+                    * abs(math.sin(math.radians(az))))        # deg/hour
+            approx = SUN_DIAMETER / rate * 60.0               # minutes
+            assert abs(dur - approx) <= max(0.15, 0.08 * approx), (
+                label, what, dur, approx)
+    for lat, lon, tzh, date, want_dur in (
+            (-33.8688, 151.2093, 11.0, dt.date(2026, 12, 21), 2.94),
+            (51.5074, -0.1278, 1.0, dt.date(2026, 6, 21), 4.52),
+            (64.1466, -21.9426, 0.0, dt.date(2026, 12, 21), 10.83)):
+        ev = sun_events(date, lat, lon, tzh)
+        assert abs(ev["rise_dur"] - want_dur) < 0.2, (lat, ev["rise_dur"])
+        assert abs(ev["set_dur"] - want_dur) < 0.2, (lat, ev["set_dur"])
+    print("  horizon-crossing durations OK (Sydney solstice ~2m56s, "
+          "Reykjavik midwinter ~10m50s)")
+
     # 2. Polar night and midnight sun (Longyearbyen, Svalbard, 78.22 N).
     for date, expect in ((dt.date(2026, 12, 21), "night"),
                          (dt.date(2026, 6, 21), "day")):
         ev = sun_events(date, 78.2232, 15.6267, 1.0)
         assert ev["polar"] == expect and ev["rise"] is None and ev["set"] is None
         assert ev["rise_az"] is None and ev["set_az"] is None
+        assert ev["rise_dur"] is None and ev["set_dur"] is None
         assert ev["daylight"] == (0.0 if expect == "night" else 1440.0)
-    print("  polar night / midnight sun OK")
+    # Grazing days: when the sun first returns after the polar night it
+    # peeks over the horizon without ever fully clearing it — the rise
+    # exists but its duration doesn't, until a couple of days later (and
+    # the first full crossing still takes ~40 minutes).
+    rows_g = compute_rows(78.2232, 15.6267, dt.date(2026, 2, 10), 12,
+                          "fixed", 1.0)
+    grazing = [r for r in rows_g
+               if r["rise"] is not None and r["rise_dur"] is None]
+    full = [r for r in rows_g if r["rise_dur"] is not None]
+    assert grazing and full and full[0]["rise_dur"] > 1200, (
+        len(grazing), len(full))
+    print("  polar night / midnight sun OK (+%d grazing days: sun up, disc "
+          "never fully clear)" % len(grazing))
 
     # 3. Equinox at the equator: day length just over 12 h (refraction),
     #    sun rising due east and setting due west.
@@ -1879,8 +2005,11 @@ def selftest():
     assert _hms(12, 4) < d < _hms(12, 10), fmt_span(d)
     assert abs(ev["rise_az"] - 90.0) < 1.0, ev["rise_az"]
     assert abs(ev["set_az"] - 270.0) < 1.0, ev["set_az"]
-    print("  equator equinox day length OK (%s, rise az %.1f)"
-          % (fmt_span(d), ev["rise_az"]))
+    # Rising vertically, the fastest crossing on Earth: ~2 min 8 s.
+    assert abs(ev["rise_dur"] - 2.13) < 0.05, ev["rise_dur"]
+    print("  equator equinox day length OK (%s, rise az %.1f, crossing %s)"
+          % (fmt_span(d), ev["rise_az"],
+             fmt_dur(int(round(ev["rise_dur"] * 60.0)))))
 
     # 4. Magnetic declination — the embedded WMM2025 must reproduce the
     #    official NOAA/BGS test vectors (WMM2025_TestValues.txt ships with
@@ -1946,6 +2075,10 @@ def selftest():
         assert r["rise"] is not None and r["set"] > r["rise"]
         assert r["day"] == r["set"] - r["rise"]
         assert r["off"] == 600
+        # Crossing durations: 2:34 (equinox) .. 2:56 (solstice) at Sydney's
+        # latitude, whole seconds, rise/set nearly symmetric within a day.
+        assert 145 <= r["rise_dur"] <= 185 and 145 <= r["set_dur"] <= 185, r
+        assert abs(r["rise_dur"] - r["set_dur"]) <= 5, r
         # Azimuths mirror around the meridian; only the declination's drift
         # between the two events (a fraction of a degree) breaks the symmetry.
         assert 0.0 < r["rise_az"] < 180.0 < r["set_az"] < 360.0
@@ -2028,6 +2161,10 @@ def selftest():
         flat["rise_az"], hills["rise_az"])
     assert 2.0 < hills["set_az"] - flat["set_az"] < 20.0, (
         flat["set_az"], hills["set_az"])
+    # Crossing durations exist over a ridge too (the lower-limb solve
+    # re-converges its own azimuth and hill altitude).
+    assert 2.0 < hills["rise_dur"] < 4.0, hills["rise_dur"]
+    assert 2.0 < hills["set_dur"] < 4.0, hills["set_dur"]
     # An explicitly flat profile must match the default bit-for-bit.
     assert sun_events(dt.date(2026, 12, 21), -33.8688, 151.2093, 11.0,
                       []) == flat
@@ -2063,20 +2200,43 @@ def selftest():
     assert rows3_b == rows3
     assert any(" ---" in ln for ln in text3.splitlines()
                if not ln.startswith("#"))   # polar days show '---' azimuths
-    # Files saved before the RiseMag/SetMag columns existed (7 columns),
-    # and before the azimuth columns (5), must still load.
+    # Duration formatting: MM:SS, spilling to H:MM:SS on the rare threshold
+    # days near the polar circles where a crossing tops an hour.
+    for sec, txt in ((174, "02:54"), (2421, "40:21"), (0, "00:00"),
+                     (3599, "59:59"), (4530, "1:15:30"), (None, "--:--")):
+        assert fmt_dur(sec) == txt, (sec, fmt_dur(sec))
+        assert parse_dur(txt) == sec, txt
+    assert parse_dur("00:02:54") == 174     # the brief HH:MM:SS format
+    assert parse_dur("--:--:--") is None
+    legacy11 = (TABLE_HEADER + "\n"
+                "2026-07-03    07:00:57  00:02:54    62.6    49.8   16:57:53"
+                "  00:02:54   297.4   284.6   09:56:56   +10:00\n")
+    row_l11 = parse_table_text(legacy11)[0][0]
+    assert row_l11["rise_dur"] == 174 and row_l11["set_dur"] == 174
+    # Files saved before the RiseDur/SetDur columns existed (9 columns),
+    # before the magnetic columns (7), and before the azimuth columns (5),
+    # must still load.
+    legacy9 = (TABLE_HEADER + "\n"
+               "2026-07-03    07:00:57    62.6    49.8   16:57:53   297.4"
+               "   284.6   09:56:56   +10:00\n")
+    row_l9 = parse_table_text(legacy9)[0][0]
+    assert row_l9["rise"] == _hms(7, 0, 57) and row_l9["rise_az"] == 62.6
+    assert row_l9["rise_mag"] == 49.8 and row_l9["set_mag"] == 284.6
+    assert row_l9["rise_dur"] is None and row_l9["set_dur"] is None
     legacy7 = (TABLE_HEADER + "\n"
                "2026-07-03    07:00:57    63.4   16:57:53   296.6   09:56:56"
                "   +10:00\n")
     row_l7 = parse_table_text(legacy7)[0][0]
     assert row_l7["rise_az"] == 63.4 and row_l7["set_az"] == 296.6
     assert row_l7["rise_mag"] is None and row_l7["set_mag"] is None
+    assert row_l7["rise_dur"] is None and row_l7["set_dur"] is None
     legacy = (TABLE_HEADER + "\n"
               "2026-07-03    07:00:57   16:57:53   09:56:56   +10:00\n")
     row_l = parse_table_text(legacy)[0][0]
     assert row_l["rise"] == _hms(7, 0, 57) and row_l["off"] == 600
     assert row_l["rise_az"] is None and row_l["set_az"] is None
     assert row_l["rise_mag"] is None and row_l["set_mag"] is None
+    assert row_l["rise_dur"] is None and row_l["set_dur"] is None
     print("  table text round-trip OK (incl. polar rows, legacy files)")
 
     # 10. The entry parsers: fixed offsets, and coordinates as typed OR as

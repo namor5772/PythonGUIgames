@@ -101,9 +101,17 @@ never touch Tk (tk Vars are created only inside `_build_gui`).
   Zenith 90.833° = refraction + solar disc radius. It also returns
   `rise_az`/`set_az` — the sun's azimuth at each event (deg clockwise from
   true north, E=90), converged in the same per-event iteration the skyline
-  code uses. `--selftest` pins WolframAlpha-verified times (±120 s) *and*
-  azimuths (±2°) for London / Sydney / Reykjavik plus polar cases; keep
-  those anchors when touching the math.
+  code uses — and `rise_dur`/`set_dur`, the disc's horizon-crossing time:
+  a second solve with the center one `SUN_DIAMETER` (32′) higher, i.e. the
+  lower limb on the *same* line, so refraction cancels out of the
+  difference. Durations are `None` on grazing days (disc peeks over but
+  never fully clears — real near the polar circles, where the first full
+  crossing after the polar night takes ~40 min). `--selftest` pins
+  WolframAlpha-verified times (±120 s) *and* azimuths (±2°) for London /
+  Sydney / Reykjavik plus polar cases, and cross-checks durations against
+  the independent slant formula 15°/h · cos φ · sin *az* (±8% — azimuth
+  drift during long crossings is real) plus pinned values; keep those
+  anchors when touching the math.
 - **Geomagnetism is embedded, not fetched:** the official WMM2025 `.COF`
   coefficient file sits verbatim in `_WMM_COF` (public domain, NOAA/BGS —
   degree-12 spherical harmonics + linear secular variation).
@@ -142,11 +150,14 @@ never touch Tk (tk Vars are created only inside `_build_gui`).
   `parse_table_text` round-trip exactly (selftest-enforced) — Load rebuilds
   the graph from the file alone. Header lines are `# Key : value` (unknown
   keys ignored). Keep the file plain ASCII so it opens cleanly anywhere.
-  Data rows have 9 columns — RiseAz/RiseMag and SetAz/SetMag sit beside
-  their events, stored rounded to 0.1° so `round(az,1)` → `%6.1f` →
-  `float` is lossless ('---' on polar days); 7-column pre-magnetic and
-  5-column pre-azimuth files still parse (missing columns None, also
-  selftest-enforced).
+  Data rows have 11 columns — RiseDur/SetDur (crossing time as MM:SS whole
+  seconds, spilling to H:MM:SS if a polar-threshold crossing tops an hour;
+  '--:--' on polar *and* grazing days; `parse_dur` also reads the brief
+  HH:MM:SS interlude format) plus RiseAz/RiseMag and SetAz/SetMag all sit
+  beside their events, azimuths stored rounded to 0.1° so `round(az,1)` →
+  `%6.1f` → `float` is lossless ('---' on polar days); 9-column
+  pre-duration, 7-column pre-magnetic and 5-column pre-azimuth files still
+  parse (missing columns None, also selftest-enforced).
   Load also restores the *settings* by inverting the header's descriptive
   lines (`parse_tz_desc`, `parse_horizon_desc`), so a loaded file
   regenerates itself (selftest-enforced) — if you reword the `tz_desc` /

@@ -224,9 +224,9 @@ hemisphere letters (`34.2196 S`), degrees-minutes-seconds
 (`34°13'10.5" S`), or text pasted straight from Wikipedia / Google Maps
 (Unicode minus signs, degree marks and hidden spaces are all handled) —
 choose how the time zone should be handled, and it computes **sunrise,
-sunset — each with its azimuth, true *and* magnetic — and day length for
-today and every day for a year ahead** (366 rows by default; 1–1500
-settable, any start date).
+sunset — each with its azimuth (true *and* magnetic) and how long the disc
+takes to cross the horizon — and day length for today and every day for a
+year ahead** (366 rows by default; 1–1500 settable, any start date).
 
 - **Accurate** — NOAA solar-position equations (Jean Meeus), with the solar
   declination and the equation of time re-evaluated *at each event's own
@@ -248,6 +248,16 @@ settable, any start date).
   `magnetic_declination(lat, lon, date)`, `true_to_magnetic(bearing, …)`
   and `magnetic_to_true(bearing, …)` do one-off conversions in a Python
   shell. (Compass *deviation* from nearby metal is yours to manage.)
+- **Crossing durations** — the `RiseDur` / `SetDur` columns time the event
+  itself: from the upper limb's first gleam to the lower limb lifting clear
+  (reversed at sunset). The disc must climb its own 32′ diameter — both
+  endpoints put a limb on the *same* horizon line, so refraction cancels —
+  which takes ~2–3 minutes at mid-latitudes (Earth's fastest, ~2 min 8 s,
+  is an equatorial equinox; Reykjavik's midwinter crossing runs ~11 min).
+  On grazing polar-circle days the sun rises without the disc ever fully
+  clearing the horizon; the duration then shows `--:--` (when the sun
+  first returns to Longyearbyen in February, the first complete crossing
+  takes ~40 minutes).
 - **Time zones done honestly** — either your **system zone with DST applied
   per day** from the OS rules (the sunrise/sunset curves show the 1-hour steps
   at each changeover while day length stays smooth), or any **fixed UTC
@@ -258,8 +268,8 @@ settable, any start date).
   zone's output exactly if you mirror its rules. Every row records the UTC
   offset it used, and the file header states the rules.
 - **Polar-safe** — days when the sun never rises or never sets show
-  `--:--:--` (with `---` azimuths) and 0 h / 24 h daylight (try
-  Longyearbyen: `78.2232`, `15.6267`).
+  `--:--:--` (with `---` azimuths and `--:--` durations) and 0 h / 24 h
+  daylight (try Longyearbyen: `78.2232`, `15.6267`).
 - **Valley / hills aware** — an optional **skyline** raises the horizon: a
   single number for a uniform ridge (`5`), or an `az:alt` profile
   (`60:2, 90:6, 240:8`; azimuth N=0°, E=90°, linearly interpolated with
@@ -271,8 +281,9 @@ settable, any start date).
   header with the other assumptions.
 - **Graph** — sunrise and sunset curves over a shaded daylight band, a
   day-length curve on the same 24 h axis, month gridlines, and a **hover
-  crosshair** that reads out the exact times and azimuths for any day
-  (true bearings on the first line, the magnetic compass pair beneath).
+  crosshair** that reads out the exact times, azimuths and crossing
+  durations for any day (true bearings on the first line, the horizon
+  crossings and the magnetic compass pair beneath).
 - **Text table** — the same data as a commented text file whose header states
   every assumption (location, latitude, longitude, time-zone handling,
   algorithm, units); view it on the **TABLE** tab, **SAVE AS…** anywhere, and
@@ -280,8 +291,8 @@ settable, any start date).
   **restores every assumption from the header** — coordinates, time-zone /
   DST settings, skyline and range go back into the form — so a saved file
   regenerates itself with one CALCULATE on any machine (files saved before
-  the magnetic columns existed — or before the azimuth columns — still
-  load). Every calculation is
+  the duration columns existed — or the magnetic ones, or the azimuths —
+  still load). Every calculation is
   also autosaved to `%APPDATA%\Sun2Set\sun2set_latest.txt` (macOS/Linux:
   `~/Sun2Set/`). The Save/Load dialogs open in your Documents folder the
   first time, then remember the folder you last used (persisted).
@@ -294,11 +305,13 @@ The whole session persists in `%APPDATA%\Sun2Set\config.json`: the window
 position, theme, active tab and **every input field exactly as typed** —
 even edits you never calculated — so the app reopens just as you left it.
 `--selftest` checks the solar math against reference almanac times and
-azimuths, the magnetic model against the official NOAA/BGS WMM2025 test
-vectors (plus NOAA's online calculator for Sydney, Binda, London and
-Reykjavik), polar cases, the manual-DST rule engine (including that it
-reproduces the system zone exactly), the skyline model (delays, profiles,
-ridge-blocked days), window-position parsing, table round-trips (including
+azimuths, the crossing durations against an independent slant-rate formula
+(15°/h · cos φ · sin *azimuth*, plus grazing polar days), the magnetic
+model against the official NOAA/BGS WMM2025 test vectors (plus NOAA's
+online calculator for Sydney, Binda, London and Reykjavik), polar cases,
+the manual-DST rule engine (including that it reproduces the system zone
+exactly), the skyline model (delays, profiles, ridge-blocked days),
+window-position parsing, table round-trips (including pre-duration,
 pre-azimuth and pre-magnetic legacy files) and save/load — all headlessly.
 
 ## Desktop shortcuts
@@ -415,7 +428,7 @@ and creates **`Sun2Set.app`** on your Desktop.
 | --- | --- |
 | `MyTetris.py` | The game — accurate Tetris clone (SRS, 7-bag, DAS, ghost, hold, next-3, T-spins, back-to-back, start menu, difficulty, sound, high scores) plus a headless `--selftest`. |
 | `MyPocketTanks.py` | Artillery duel — weapon draft or one-weapon matches (settable 1–20 rounds), 20 weapons, destructible terrain, wind, fuel-limited movement, AI or hotseat, sound — plus a headless `--selftest`. |
-| `Sun2Set.py` | Bonus non-game — sunrise/sunset almanac: a year of sunrise, sunset and day length for any location (NOAA equations), azimuths in true *and* magnetic bearings (embedded WMM2025), DST-aware or fixed-offset, graph with hover readout, assumptions-headed text file with Save/Load — plus a headless `--selftest`. |
+| `Sun2Set.py` | Bonus non-game — sunrise/sunset almanac: a year of sunrise, sunset and day length for any location (NOAA equations), azimuths in true *and* magnetic bearings (embedded WMM2025), horizon-crossing durations, DST-aware or fixed-offset, graph with hover readout, assumptions-headed text file with Save/Load — plus a headless `--selftest`. |
 | `make_tetris_icon.py` | **Windows icon** — generates `mytetris.ico` by writing the ICO/BMP bytes directly (no Pillow). |
 | `make_pockettanks_icon.py` | **Windows icon** — generates `mypockettanks.ico` (tank, shell arc, explosion, starry sky); reuses `make_tetris_icon.build_ico()`. No Pillow. |
 | `make_sun2set_icon.py` | **Windows icon** — generates `sun2set.ico` (sunset over the sea, with the sun's dotted day-path arc); reuses `make_tetris_icon.build_ico()`. No Pillow. |
