@@ -68,8 +68,10 @@ headless — `step()` is pure logic driven by `--selftest`; `tick()` = `step()` 
   focused), and `_button`/`_draw_pick` render a `FOCUS` halo. Handled at
   the top of `_on_key` (returning "break" to stop Tk's own Tab traversal)
   so it works in every state including the confirm modal; screen
-  transitions clear `focus_action`. Weapon cycling is `[`/`]` only — Tab
-  was repurposed; don't rebind it.
+  transitions clear `focus_action` — except the one-weapon pick screen,
+  which enters with the last-picked (gold-outlined) card pre-focused so
+  Enter alone replays the previous choice. Weapon cycling is `[`/`]` only
+  — Tab was repurposed; don't rebind it.
 - **Arrow-cluster navigation:** ←/Home = Shift-Tab, →/End = Tab, and
   ↑/PgUp / ↓/PgDn move *spatially* (`_focus_spatial`: nearest row above/
   below by vertical gap then horizontal offset, wrapping at the edges —

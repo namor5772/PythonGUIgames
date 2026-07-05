@@ -530,6 +530,11 @@ class PocketTanks:
         self.phase = "aim"
         self.confirm_menu = False
         self.focus_action = None
+        if self.match_type == "single" and self.single_weapon in self.pool:
+            # Enter the one-weapon pick screen with the keyboard focus
+            # already on the last-picked (gold-outlined) card: Enter alone
+            # replays the previous choice.
+            self.focus_action = f"pick:{self.pool.index(self.single_weapon)}"
         self.ai_plan = None
         self.ai_wait = 30
         self.state = "pick"
@@ -2186,6 +2191,8 @@ def selftest():
         g.start_match()
         assert g.state == "pick" and len(g.pool) == len(WEAPONS), \
             "single mode should offer every weapon"
+        assert g.focus_action == f"pick:{g.pool.index(g.single_weapon)}", \
+            "one-weapon pick should enter focused on the previous choice"
         g.pick_weapon(g.pool.index(wkey))
         assert g.state == "playing", "single pick did not start combat"
         assert all(t.arsenal == [wkey] * rounds for t in g.tanks), \
@@ -2199,8 +2206,11 @@ def selftest():
         assert g.shots_fired == [rounds, rounds], \
             f"one-weapon: shots_fired={g.shots_fired}"
         _assert_terrain_ok(g, f"one-weapon {wkey}")
-        print(f"  one-weapon ok: {wkey} x{rounds} — "
-              f"{g.tanks[0].score}:{g.tanks[1].score}")
+        s0, s1 = g.tanks[0].score, g.tanks[1].score
+        g.start_match()                    # rematch: the pick screen returns
+        assert g.focus_action == f"pick:{g.pool.index(wkey)}", \
+            "rematch should focus the weapon picked last time"
+        print(f"  one-weapon ok: {wkey} x{rounds} — {s0}:{s1}")
 
     # 5. Keyboard focus (Tab/Shift-Tab + Enter): pure logic over the
     #    per-frame buttons list. Focus tracks the ACTION string, because

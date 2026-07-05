@@ -171,7 +171,7 @@ opponent!)
   plays differently), or a **one-weapon match**: choose a single weapon that
   *both* tanks fire for a settable **1–20 rounds** — set the round count on
   the menu, then click the weapon on the pick screen (your last pick is
-  highlighted in gold).
+  highlighted in gold and starts keyboard-focused, so Enter replays it).
 - **20 distinct weapons** — simple shells and big blasts; multi-shot spreads
   (Triple Shot, Buckshot, Cluster Pod, Pentabomb — a 5-way MIRV); terrain
   tools (Dirt Ball, Excavator, Dirt Slinger, Drill Bit, Tremor); and exotics
