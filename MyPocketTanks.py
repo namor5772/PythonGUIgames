@@ -11,10 +11,11 @@ Features:
     settable number of rounds (1-20)
   * 20 distinct weapons: splitters, rollers, diggers, napalm, lasers, nukes...
   * Wind that changes every turn and bends every shot
-  * Tank movement with a limited fuel tank (and slopes too steep to climb)
+  * Tank movement with a limited fuel tank (and slopes too steep to climb) —
+    toggleable on the menu; when on, the AI drives to better firing spots too
   * 1-player mode vs. an aiming AI (Easy / Normal / Hard) or 2-player hotseat
   * Synthesized sound effects (stdlib; Windows winsound / macOS afplay)
-  * Config persistence (window position, mode, AI level, match style)
+  * Config persistence (window position, mode, AI level, match style, moving)
     in %APPDATA%\\MyPocketTanks
 
 Controls (aiming):
@@ -83,9 +84,14 @@ FONT = "Consolas"
 
 AI_LEVELS = {
     # aim_err: stddev of angle/power noise. sims: candidate shots evaluated.
-    "Easy":   {"aim_err": 9.0, "sims": 25,  "blurb": "Wobbly aim"},
-    "Normal": {"aim_err": 4.0, "sims": 80,  "blurb": "Decent gunner"},
-    "Hard":   {"aim_err": 1.2, "sims": 220, "blurb": "Deadly accurate"},
+    # move_err: how badly (px) the best shot must miss before the AI drives
+    # off hunting a better firing spot (only when moving is enabled).
+    "Easy":   {"aim_err": 9.0, "sims": 25,  "move_err": 200,
+               "blurb": "Wobbly aim"},
+    "Normal": {"aim_err": 4.0, "sims": 80,  "move_err": 110,
+               "blurb": "Decent gunner"},
+    "Hard":   {"aim_err": 1.2, "sims": 220, "move_err": 50,
+               "blurb": "Deadly accurate"},
 }
 AI_LEVEL_NAMES = list(AI_LEVELS)
 
@@ -454,6 +460,11 @@ class PocketTanks:
         self.single_weapon = self.config.get("single_weapon", "single")
         if self.single_weapon not in WEAPON_BY_KEY:
             self.single_weapon = "single"
+        # Tank driving during the aim phase — a menu toggle (humans and AI
+        # alike). The per-match FUEL_MAX budget is what keeps repositioning
+        # from dominating play.
+        me = self.config.get("move_enabled", True)
+        self.move_enabled = me if isinstance(me, bool) else True
         self.rounds = ROUNDS            # shots per side; set per match
 
         self.terrain = generate_terrain(self.rng)
@@ -592,7 +603,8 @@ class PocketTanks:
     def move_tank(self, direction):
         """Drive 1px left/right if fuel remains and the slope is climbable."""
         t = self.current_tank()
-        if self.phase != "aim" or t.fuel < FUEL_PER_PX:
+        if not self.move_enabled or self.phase != "aim" \
+                or t.fuel < FUEL_PER_PX:
             return False
         nx = t.x + direction
         half = TANK_W // 2
@@ -611,6 +623,28 @@ class PocketTanks:
         if self.frame % 6 == 0:
             self.sound.play("move")
         return True
+
+    def _drive_range(self, t):
+        """The x-interval tank t could reach right now: walk px by px each
+        way under move_tank's own fuel/bounds/slope/enemy rules. The AI's
+        move planner only considers spots inside this interval."""
+        half = TANK_W // 2
+        other = self.tanks[1 - t.pid]
+        budget = int(t.fuel / FUEL_PER_PX)
+        span = [int(t.x), int(t.x)]
+        for i, d in ((0, -1), (1, 1)):
+            x, steps = int(t.x), 0
+            while steps < budget:
+                nx = x + d
+                if not (half <= nx <= FIELD_W - 1 - half):
+                    break
+                if self.terrain[x] - self.terrain[nx] > MAX_CLIMB:
+                    break
+                if abs(nx - other.x) < TANK_W:
+                    break
+                x, steps = nx, steps + 1
+            span[i] = x
+        return span[0], span[1]
 
     # ------------------------------------------------------------------ fire
     def fire(self):
@@ -1044,7 +1078,11 @@ class PocketTanks:
 
     def _ai_plan_shot(self):
         """Pick a weapon and search angle/power for the closest impact to the
-        enemy, then blur the answer by the difficulty's aim error."""
+        enemy, then blur the answer by the difficulty's aim error. With
+        moving enabled the plan may also carry a move_to spot: the AI hunts
+        a clearer firing position when the best shot from here is badly
+        blocked, and now and then makes a short scoot just to use its legs.
+        The angle/power solution is always computed AT the chosen spot."""
         lvl = AI_LEVELS[self.ai_level]
         t = self.current_tank()
         ex, ey = self.enemy_tank().center()
@@ -1066,27 +1104,70 @@ class PocketTanks:
                 return 1e9
             return math.hypot(hit[0] - ex, hit[1] - ey)
 
-        # Aim into the enemy's half of the sky, then refine the best find.
-        toward_right = ex > t.x
-        best, best_err = (60.0 if toward_right else 120.0, 60.0), 1e9
-        for _ in range(lvl["sims"]):
-            angle = self.rng.uniform(15, 88) if toward_right \
-                else self.rng.uniform(92, 165)
-            power = self.rng.uniform(25, 100)
-            err = error(angle, power)
-            if err < best_err:
-                best, best_err = (angle, power), err
-        for _ in range(lvl["sims"] // 2):
-            angle = best[0] + self.rng.uniform(-4, 4)
-            power = best[1] + self.rng.uniform(-6, 6)
-            angle = max(1.0, min(179.0, angle))
-            power = max(5.0, min(100.0, power))
-            err = error(angle, power)
-            if err < best_err:
-                best, best_err = (angle, power), err
+        def search(n):
+            """Random angle/power hunt from wherever the tank sits NOW (the
+            move planner parks it on candidate spots), aiming into the
+            enemy's half of the sky, then refining the best find."""
+            toward_right = ex > t.x
+            best, best_err = (60.0 if toward_right else 120.0, 60.0), 1e9
+            for _ in range(n):
+                angle = self.rng.uniform(15, 88) if toward_right \
+                    else self.rng.uniform(92, 165)
+                power = self.rng.uniform(25, 100)
+                err = error(angle, power)
+                if err < best_err:
+                    best, best_err = (angle, power), err
+            for _ in range(n // 2):
+                angle = best[0] + self.rng.uniform(-4, 4)
+                power = best[1] + self.rng.uniform(-6, 6)
+                angle = max(1.0, min(179.0, angle))
+                power = max(5.0, min(100.0, power))
+                err = error(angle, power)
+                if err < best_err:
+                    best, best_err = (angle, power), err
+            return best, best_err
+
+        best, best_err = search(lvl["sims"])
+
+        # Driving: hunt a clearer firing spot when the best shot from here
+        # misses badly, or take a small unpredictability scoot. Spots come
+        # from _drive_range (guaranteed reachable) and are rationed to half
+        # the remaining fuel, so the tank never strands itself in one turn.
+        move_to = None
+        if self.move_enabled and t.fuel >= 8 * FUEL_PER_PX:
+            home = t.x, t.y
+            lo, hi = self._drive_range(t)
+            ration = t.fuel / FUEL_PER_PX / 2
+            lo, hi = max(lo, home[0] - ration), min(hi, home[0] + ration)
+
+            def try_at(x):
+                """Best shot if the tank stood at x (then put it back)."""
+                t.x = float(x)
+                t.settle(self.terrain)
+                sol = search(max(15, lvl["sims"] // 2))
+                t.x, t.y = home
+                return sol
+
+            if best_err > lvl["move_err"]:
+                for off in (-90, -60, -30, 30, 60, 90):
+                    cand = round(home[0] + off)
+                    if not (lo <= cand <= hi) or abs(cand - home[0]) < 8:
+                        continue
+                    sol, err = try_at(cand)
+                    if err + 30 < best_err:      # materially better only
+                        best, best_err, move_to = sol, err, cand
+            elif t.fuel > FUEL_MAX * 0.25 and self.rng.random() < 0.3:
+                off = self.rng.uniform(10, 26) * self.rng.choice((-1, 1))
+                cand = round(max(lo, min(hi, home[0] + off)))
+                if abs(cand - home[0]) >= 8:
+                    sol, err = try_at(cand)
+                    # A scoot must not cost real accuracy (tightest for Hard).
+                    if err <= best_err + 8 + lvl["aim_err"]:
+                        best, best_err, move_to = sol, err, cand
+
         angle = max(1.0, min(179.0, best[0] + self.rng.gauss(0, lvl["aim_err"])))
         power = max(5.0, min(100.0, best[1] + self.rng.gauss(0, lvl["aim_err"] * 0.8)))
-        return dict(angle=angle, power=power, weapon=weapon)
+        return dict(angle=angle, power=power, weapon=weapon, move_to=move_to)
 
     def _ai_act(self):
         """One frame of AI behavior during its aim phase: plan once, then
@@ -1100,6 +1181,16 @@ class PocketTanks:
         if self.ai_plan is None:
             self.ai_plan = self._ai_plan_shot()
         plan = self.ai_plan
+        # Drive to the planned firing spot first, one px per frame — the
+        # angle/power solution was computed for THAT spot. If the drive is
+        # ever cut short (blocked edge case), fire from here: a couple of
+        # px barely shifts the solution, and the aim blur dwarfs it.
+        mt = plan.get("move_to")
+        if mt is not None:
+            if abs(mt - t.x) >= 1 \
+                    and self.move_tank(1 if mt > t.x else -1):
+                return
+            plan["move_to"] = None
         if t.arsenal[t.weapon_i] != plan["weapon"] \
                 and plan["weapon"] in t.arsenal:
             t.weapon_i = t.arsenal.index(plan["weapon"])
@@ -1174,6 +1265,7 @@ class PocketTanks:
         self.config["match_type"] = self.match_type
         self.config["single_rounds"] = self.single_rounds
         self.config["single_weapon"] = self.single_weapon
+        self.config["move_enabled"] = self.move_enabled
         save_config(self.config)
 
     # -------------------------------------------------------------------- UI
@@ -1439,24 +1531,26 @@ class PocketTanks:
                            outline=BTN_EDGE, width=1, tags="dyn")
         c.create_rectangle(lx + 1, top + 77, lx + 1 + 236 * t.power / 100,
                            top + 83, fill=t.color, width=0, tags="dyn")
-        c.create_text(lx, top + 104, anchor="w", text="MOVE", fill=SUBTEXT,
-                      font=(FONT, 10), tags="dyn")
-        can_move = live and t.fuel >= FUEL_PER_PX
-        self._button(lx + 74, top + 92, lx + 116, top + 116, "◀",
-                     "moveL", can_move)
-        self._button(lx + 122, top + 92, lx + 164, top + 116, "▶",
-                     "moveR", can_move)
-        c.create_text(lx, top + 134, anchor="w",
-                      text=f"FUEL {t.fuel:5.1f}", fill=SUBTEXT,
-                      font=(FONT, 9), tags="dyn")
-        c.create_rectangle(lx + 90, top + 128, lx + 238, top + 138,
-                           outline=BTN_EDGE, width=1, tags="dyn")
-        c.create_rectangle(lx + 91, top + 129,
-                           lx + 91 + 146 * t.fuel / FUEL_MAX, top + 137,
-                           fill="#2ecc55", width=0, tags="dyn")
+        if self.move_enabled:
+            c.create_text(lx, top + 104, anchor="w", text="MOVE",
+                          fill=SUBTEXT, font=(FONT, 10), tags="dyn")
+            can_move = live and t.fuel >= FUEL_PER_PX
+            self._button(lx + 74, top + 92, lx + 116, top + 116, "◀",
+                         "moveL", can_move)
+            self._button(lx + 122, top + 92, lx + 164, top + 116, "▶",
+                         "moveR", can_move)
+            c.create_text(lx, top + 134, anchor="w",
+                          text=f"FUEL {t.fuel:5.1f}", fill=SUBTEXT,
+                          font=(FONT, 9), tags="dyn")
+            c.create_rectangle(lx + 90, top + 128, lx + 238, top + 138,
+                               outline=BTN_EDGE, width=1, tags="dyn")
+            c.create_rectangle(lx + 91, top + 129,
+                               lx + 91 + 146 * t.fuel / FUEL_MAX, top + 137,
+                               fill="#2ecc55", width=0, tags="dyn")
+        move_keys = "A/D move  " if self.move_enabled else ""
         c.create_text(lx, top + 162, anchor="w",
                       text="keys: ←→ or End/Home angle  ↑↓ power  "
-                           "A/D move  [ ] weapon  Space fire",
+                           f"{move_keys}[ ] weapon  Space fire",
                       fill="#55556a", font=(FONT, 9), tags="dyn")
 
         # --- middle: weapon selector ---------------------------------------
@@ -1503,7 +1597,10 @@ class PocketTanks:
                      fg="#ff6a6a" if live else TEXT, size=22)
         status = ""
         if self.state == "playing" and t.is_ai and self.phase == "aim":
-            status = "computer is aiming..."
+            driving = self.ai_plan is not None \
+                and self.ai_plan.get("move_to") is not None
+            status = "computer is driving..." if driving \
+                else "computer is aiming..."
         elif self.phase == "flight":
             status = "shot in flight"
         c.create_text(fx + 115, top + 120, text=status, fill=SUBTEXT,
@@ -1521,7 +1618,7 @@ class PocketTanks:
         c.create_text(cx, 146, text="artillery duel on destructible ground",
                       fill=SUBTEXT, font=(FONT, 14), tags="dyn")
         # mode select
-        y = 218
+        y = 204
         c.create_text(cx - 260, y, anchor="w", text="MODE", fill=SUBTEXT,
                       font=(FONT, 13), tags="dyn")
         for i, (mode, label) in enumerate([("1P", "1 PLAYER vs COMPUTER"),
@@ -1531,7 +1628,7 @@ class PocketTanks:
             self._button(x0, y - 18, x0 + 245, y + 18, label, f"mode:{mode}",
                          True, fill="#26263a" if sel else BTN_BG,
                          fg=GOLD if sel else TEXT, size=11)
-        y = 282
+        y = 258
         if self.mode == "1P":
             c.create_text(cx - 260, y, anchor="w", text="AI", fill=SUBTEXT,
                           font=(FONT, 13), tags="dyn")
@@ -1542,11 +1639,11 @@ class PocketTanks:
                              name.upper(), f"ai:{name}", True,
                              fill="#26263a" if sel else BTN_BG,
                              fg=GOLD if sel else TEXT, size=11)
-            c.create_text(cx - 150, y + 32, anchor="w",
+            c.create_text(cx - 150, y + 27, anchor="w",
                           text=AI_LEVELS[self.ai_level]["blurb"],
                           fill=SUBTEXT, font=(FONT, 10), tags="dyn")
         # match style: classic draft, or one weapon for a settable rounds
-        y = 352
+        y = 312
         c.create_text(cx - 260, y, anchor="w", text="MATCH", fill=SUBTEXT,
                       font=(FONT, 13), tags="dyn")
         for i, (mt, label) in enumerate([("draft", "DRAFT 10 FROM POOL"),
@@ -1556,8 +1653,20 @@ class PocketTanks:
             self._button(x0, y - 18, x0 + 245, y + 18, label, f"match:{mt}",
                          True, fill="#26263a" if sel else BTN_BG,
                          fg=GOLD if sel else TEXT, size=11)
+        # tank driving: parked, or fuel-limited moves (the AI drives too)
+        y = 366
+        c.create_text(cx - 260, y, anchor="w", text="MOVING", fill=SUBTEXT,
+                      font=(FONT, 13), tags="dyn")
+        drive_lbl = f"DRIVE (FUEL {FUEL_MAX:.0f})"
+        for i, (val, label) in enumerate([("off", "TANKS PARKED"),
+                                          ("on", drive_lbl)]):
+            sel = self.move_enabled == (val == "on")
+            x0 = cx - 150 + i * 260
+            self._button(x0, y - 18, x0 + 245, y + 18, label, f"move:{val}",
+                         True, fill="#26263a" if sel else BTN_BG,
+                         fg=GOLD if sel else TEXT, size=11)
         if self.match_type == "single":
-            y = 416
+            y = 420
             c.create_text(cx - 260, y, anchor="w", text="ROUNDS",
                           fill=SUBTEXT, font=(FONT, 13), tags="dyn")
             self._button(cx - 150, y - 18, cx - 114, y + 18, "-", "rounds-",
@@ -1569,7 +1678,7 @@ class PocketTanks:
             c.create_text(cx + 20, y, anchor="w",
                           text="shots per tank — pick the weapon next",
                           fill=SUBTEXT, font=(FONT, 10), tags="dyn")
-        self._button(cx - 130, 450, cx + 130, 508, "S T A R T", "start",
+        self._button(cx - 130, 452, cx + 130, 510, "S T A R T", "start",
                      True, fill="#183822", fg="#7ee08a", size=20)
         if self.match_type == "single":
             n = self.single_rounds
@@ -1584,9 +1693,10 @@ class PocketTanks:
                            "Self-damage scores for your opponent. "
                            "Most points wins.",
                       tags="dyn")
+        move_hint = "   A/D move" if self.move_enabled else ""
         c.create_text(cx, WIN_H - 60, fill="#55556a", font=(FONT, 10),
                       justify="center",
-                      text="←→ or End/Home angle   ↑↓ power   A/D move"
+                      text=f"←→ or End/Home angle   ↑↓ power{move_hint}"
                            "   [ ] weapon   Space fire   M mute   "
                            "Esc menu\nTab/Shift-Tab or the arrow keys walk "
                            "the buttons, Enter presses — or Enter/click "
@@ -1762,6 +1872,9 @@ class PocketTanks:
             self.sound.play("blip")
         elif action.startswith("match:"):
             self.match_type = action[6:]
+            self.sound.play("blip")
+        elif action.startswith("move:"):
+            self.move_enabled = action[5:] == "on"
             self.sound.play("blip")
         elif action == "rounds-":
             self.single_rounds = max(ROUNDS_MIN, self.single_rounds - 1)
@@ -1963,6 +2076,78 @@ def selftest():
     assert moved <= FUEL_MAX / FUEL_PER_PX, "moved farther than fuel allows"
     print(f"  movement ok ({moved} px on a full tank)")
 
+    # 2b. The MOVING toggle parks everything: no driving, no fuel spent,
+    #     and the AI planner never asks for a spot.
+    g = PocketTanks(root=None, enable_sound=False, persist=False, seed=7)
+    g.mode = "2P"
+    g.move_enabled = False
+    g.start_match()
+    g.state = "playing"
+    for t in g.tanks:
+        t.arsenal = ["single"] * ROUNDS
+    t = g.current_tank()
+    x0 = t.x
+    assert not g.move_tank(1) and t.x == x0 and t.fuel == FUEL_MAX, \
+        "moving-off game still drove"
+    plan = g._ai_plan_shot()
+    assert plan["move_to"] is None, "moving-off plan wants to drive"
+    print("  moving toggle ok (parked tanks stay parked)")
+
+    # 2c. _drive_range mirrors move_tank's rules: fuel, cliffs, the enemy.
+    g = PocketTanks(root=None, enable_sound=False, persist=False, seed=7)
+    g.mode = "2P"
+    g.start_match()
+    g.state = "playing"
+    g.terrain = [400] * FIELD_W               # flat proving ground
+    t, e = g.current_tank(), g.enemy_tank()
+    t.x, e.x = 300.0, 700.0
+    for tk_ in g.tanks:
+        tk_.settle(g.terrain)
+    t.fuel = 20.0                             # = 40 px of driving
+    lo, hi = g._drive_range(t)
+    assert (lo, hi) == (260, 340), f"flat range {lo},{hi}"
+    wall = int(t.x) + 15
+    for x in range(wall, FIELD_W):
+        g.terrain[x] = 340                    # 60 px cliff: too steep
+    lo, hi = g._drive_range(t)
+    assert hi == wall - 1, f"cliff not respected ({hi})"
+    g.terrain = [400] * FIELD_W
+    e.x = 350.0
+    e.settle(g.terrain)
+    lo, hi = g._drive_range(t)
+    assert hi == 350 - TANK_W, f"drove through the enemy ({hi})"
+    print("  drive range ok (fuel, cliffs, enemy block)")
+
+    # 2d. The AI executes a move plan: drives to the spot, spends fuel,
+    #     then fires its planned shot.
+    g = PocketTanks(root=None, enable_sound=False, persist=False, seed=13)
+    g.mode = "1P"
+    g.start_match()
+    g.state = "playing"
+    g.phase = "aim"
+    g.terrain = [400] * FIELD_W
+    for t in g.tanks:
+        t.arsenal = ["single"] * 3
+        t.weapon_i = 0
+        t.settle(g.terrain)
+    g.turn = 1                                # tanks[1] is the AI in 1P mode
+    ai = g.current_tank()
+    assert ai.is_ai
+    target = int(ai.x) - 40
+    g.ai_plan = dict(angle=135.0, power=60.0, weapon="single",
+                     move_to=target)
+    g.ai_wait = 0
+    fuel0 = ai.fuel
+    for _ in range(600):
+        g.step()
+        if g.phase == "flight":
+            break
+    assert g.phase == "flight", "AI with a move plan never fired"
+    assert abs(ai.x - target) < 1.5, f"AI stopped at {ai.x}, wanted {target}"
+    assert fuel0 - ai.fuel >= 39 * FUEL_PER_PX, "drive didn't spend fuel"
+    print(f"  AI drive ok (drove to {target}, fuel {fuel0:.0f} -> "
+          f"{ai.fuel:.0f})")
+
     # 3. Full AI-vs-AI matches at every difficulty level.
     for level in AI_LEVEL_NAMES:
         g = PocketTanks(root=None, enable_sound=False, persist=False,
@@ -1982,10 +2167,13 @@ def selftest():
         assert g.shots_fired == [ROUNDS, ROUNDS], \
             f"{level}: shots_fired={g.shots_fired}"
         assert all(t.score >= 0 for t in g.tanks)
+        assert all(0 <= t.fuel <= FUEL_MAX for t in g.tanks), \
+            f"{level}: fuel out of range"
         _assert_terrain_ok(g, level)
         s0, s1 = g.tanks[0].score, g.tanks[1].score
+        drove = sum(FUEL_MAX - t.fuel for t in g.tanks) / FUEL_PER_PX
         print(f"  match ok: AI {level:<6} — final {s0} : {s1} "
-              f"({frames} frames)")
+              f"({frames} frames, {drove:.0f} px driven)")
 
     # 4. One-weapon matches: both tanks share one weapon for N rounds.
     for rounds, wkey in ((1, "bigone"), (4, "triple")):

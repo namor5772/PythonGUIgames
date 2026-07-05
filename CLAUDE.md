@@ -84,9 +84,18 @@ headless — `step()` is pure logic driven by `--selftest`; `tick()` = `step()` 
   (see `_spawn_flames`) or scores explode.
 - **AI** picks angle/power by simulating real trajectories
   (`_simulate_shot`), then blurs the answer by difficulty `aim_err`.
+- **Tank driving is optional:** the menu MOVING toggle (`move_enabled`,
+  persisted, default on) gates `move_tank` for humans and AI alike; the
+  per-match `FUEL_MAX` budget is what keeps repositioning from dominating.
+  The AI's plan may carry a `move_to` spot — chosen only from
+  `_drive_range` (walks px-by-px under `move_tank`'s own fuel/slope/enemy
+  rules) and rationed to half the remaining fuel per turn — when its best
+  shot misses by more than the level's `move_err` (blocked by terrain) or
+  as an occasional short scoot. The angle/power solution is searched *at*
+  the destination; `_ai_act` drives 1 px/frame before swinging the turret.
 - **Persistence:** `%APPDATA%\MyPocketTanks\config.json` (window pos, mode,
-  AI level, match style/rounds/last one-weapon pick), gated by the `persist`
-  flag like MyTetris.
+  AI level, match style/rounds/last one-weapon pick, moving toggle), gated
+  by the `persist` flag like MyTetris.
 
 ## Sun2Set architecture
 

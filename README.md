@@ -181,8 +181,11 @@ opponent!)
   **Kiloton**.
 - **Wind** changes every turn and bends every shot; an arrow above the field
   shows direction and strength.
-- **Tank movement** — drive with A/D, limited by a match-long **fuel budget**
-  and slopes too steep to climb.
+- **Tank movement** (optional — the MOVING toggle on the menu) — drive with
+  A/D, limited by a match-long **fuel budget** and slopes too steep to climb.
+  When it's on, the **AI drives too**: it relocates when a hill blocks its
+  best shot (watch for *"computer is driving..."*) and scoots now and then
+  to stay unpredictable, all on the same fuel budget.
 - **1-player vs. an aiming AI** (Easy / Normal / Hard — it genuinely simulates
   trajectories, with difficulty controlling its aim error) or **2-player
   hotseat**.
@@ -203,7 +206,7 @@ opponent!)
 | Key | Action | Key | Action |
 | --- | --- | --- | --- |
 | ← / → | Turret angle (Shift = ×5) | ↑ / ↓ | Power (Shift = ×5) |
-| End / Home | Angle up / down (Shift = ×5) | A / D | Drive tank (uses fuel) |
+| End / Home | Angle up / down (Shift = ×5) | A / D | Drive tank (uses fuel; needs MOVING on) |
 | `[` `]` | Cycle weapon | Space / Enter | **FIRE** |
 | Tab / Shift-Tab | Walk the buttons (any screen) | Enter | Press the focused button |
 | ← → / Home / End | Previous / next button (menus, cards & dialogs) | ↑ ↓ / PgUp / PgDn | Button above / below (grids move column-wise) |
@@ -211,7 +214,8 @@ opponent!)
 | R | Rematch (after game over) | | |
 
 Config (window position, last mode, AI level, match style, one-weapon round
-count and last weapon) persists in `%APPDATA%\MyPocketTanks\config.json`
+count and last weapon, moving on/off) persists in
+`%APPDATA%\MyPocketTanks\config.json`
 (macOS/Linux: `~/MyPocketTanks/`), and `--selftest` fires every weapon
 headlessly plus plays full AI-vs-AI matches at every difficulty, including
 one-weapon matches and the keyboard-focus model.
@@ -427,7 +431,7 @@ and creates **`Sun2Set.app`** on your Desktop.
 | Script | Description |
 | --- | --- |
 | `MyTetris.py` | The game — accurate Tetris clone (SRS, 7-bag, DAS, ghost, hold, next-3, T-spins, back-to-back, start menu, difficulty, sound, high scores) plus a headless `--selftest`. |
-| `MyPocketTanks.py` | Artillery duel — weapon draft or one-weapon matches (settable 1–20 rounds), 20 weapons, destructible terrain, wind, fuel-limited movement, AI or hotseat, sound — plus a headless `--selftest`. |
+| `MyPocketTanks.py` | Artillery duel — weapon draft or one-weapon matches (settable 1–20 rounds), 20 weapons, destructible terrain, wind, optional fuel-limited movement (the AI drives too), AI or hotseat, sound — plus a headless `--selftest`. |
 | `Sun2Set.py` | Bonus non-game — sunrise/sunset almanac: a year of sunrise, sunset and day length for any location (NOAA equations), azimuths in true *and* magnetic bearings (embedded WMM2025), horizon-crossing durations, DST-aware or fixed-offset, graph with hover readout, assumptions-headed text file with Save/Load — plus a headless `--selftest`. |
 | `make_tetris_icon.py` | **Windows icon** — generates `mytetris.ico` by writing the ICO/BMP bytes directly (no Pillow). |
 | `make_pockettanks_icon.py` | **Windows icon** — generates `mypockettanks.ico` (tank, shell arc, explosion, starry sky); reuses `make_tetris_icon.build_ico()`. No Pillow. |
