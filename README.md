@@ -416,6 +416,19 @@ Desktop.
 .\create_shortcut.ps1 -Script MyApp.py -Icon myapp.ico -Name "My App"
 ```
 
+**Native `.exe` shortcut (no Python needed):** once you've compiled the standalone
+executables (see the *native C++* section below), add `-Native` to point the
+shortcut at `build\<App>.exe` directly, using the icon embedded in the exe:
+
+```powershell
+.\build_native.ps1 -App MyPocketTanks        # build it first -> build\MyPocketTanks.exe
+.\create_shortcut.ps1 -Native -Script MyPocketTanks.py
+```
+
+These are auto-named **"<App> (Native)"** (e.g. `MyPocketTanks (Native).lnk`) so
+they sit beside the Python shortcuts instead of overwriting them. A `.lnk` stores
+an absolute path, so re-run this if you move the `build\` folder.
+
 ### macOS
 
 ```bash
@@ -519,7 +532,7 @@ SmartScreen / Gatekeeper warnings and the (free) Python install if needed.
 | `make_tetris_icon_mac.py` | **macOS icon** — generates `mytetris.png` (*The Troll Piece*) by writing the PNG bytes directly (zlib + chunks, no Pillow). |
 | `make_pockettanks_icon_mac.py` | **macOS icon** — generates `mypockettanks.png` (the artillery duel at 1024 px), reusing `make_tetris_icon_mac.py`'s rasterizer + PNG writer. No Pillow. |
 | `make_sun2set_icon_mac.py` | **macOS icon** — generates `sun2set.png` (the sunset scene at 1024 px), reusing `make_tetris_icon_mac.py`'s rasterizer + PNG writer. No Pillow. |
-| `create_shortcut.ps1` | **Windows** — creates a Desktop `.lnk` for any app (parameterized: `-Script`, `-Icon`, `-Name`). |
+| `create_shortcut.ps1` | **Windows** — creates a Desktop `.lnk` for any app (parameterized: `-Script`, `-Icon`, `-Name`); add `-Native` to launch the compiled `build\<App>.exe` instead of Python (embedded icon, auto-named "<App> (Native)"). |
 | `create_shortcut.command` | **macOS** — builds an `.icns` and a clickable `.app` on the Desktop (optional args: name, target script, icon PNG; defaults to MyTetris). |
 | `package_games.py` | Builds `dist/<Name>.zip` friend-shareable bundles (all three apps, or the ones named on the command line): app + icons + license + per-app install guide + the one-click Windows/macOS installers templated from `packaging/`. |
 

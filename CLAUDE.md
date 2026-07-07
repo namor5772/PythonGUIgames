@@ -416,6 +416,6 @@ given on the command line.
 | `make_tetris_icon_mac.py` | Generates `mytetris.png` (the macOS "Troll Piece" icon) by writing the PNG bytes directly (zlib + chunks, no Pillow). |
 | `make_pockettanks_icon_mac.py` | Generates `mypockettanks.png` (macOS, 1024px) — the same artillery-duel scene as the ICO, rendered natively; reuses `make_tetris_icon_mac`'s rasterizer/PNG writer. |
 | `make_sun2set_icon_mac.py` | Generates `sun2set.png` (macOS, 1024px) — the same sunset scene as the ICO, rendered natively; reuses `make_tetris_icon_mac`'s rasterizer/PNG writer. |
-| `create_shortcut.ps1` | **Windows** Desktop `.lnk`; parameterized `-Script` / `-Icon` / `-Name`, defaults to MyTetris. |
+| `create_shortcut.ps1` | **Windows** Desktop `.lnk`; parameterized `-Script` / `-Icon` / `-Name`, defaults to MyTetris. `-Native` targets the compiled `build\<App>.exe` (embedded icon, no Python), auto-named "<App> (Native)" so it sits beside the Python shortcut. |
 | `create_shortcut.command` | **macOS**: `sips`+`iconutil` build the `.icns`, then assemble a clickable `.app` on the Desktop. Args: name, script, icon PNG (defaults = MyTetris). Bakes in the found `python3` (Finder gives apps a minimal PATH) and absolute project paths. |
 | `package_games.py` | Builds `dist/<Name>.zip` friend-shareable bundles for all three apps (see *Friend packages* above); templated installer sources live in `packaging/`. |
