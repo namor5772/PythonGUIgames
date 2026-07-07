@@ -2,6 +2,6 @@
 # the .command's `#!/bin/bash` line breaks with a CR, and cmd.exe
 # mis-parses labels/GOTO in LF-only batch files. package_games.py
 # normalizes again at zip time; these rules keep checkouts correct too.
-packaging/*.command text eol=lf
-packaging/*.bat     text eol=crlf
-packaging/*.txt     text eol=crlf
+*.command            text eol=lf
+*.bat                text eol=crlf
+packaging/*.txt      text eol=crlf

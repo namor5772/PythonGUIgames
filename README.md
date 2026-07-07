@@ -157,6 +157,46 @@ User data lives outside the repo and is **never committed**:
 Both files load defensively — if they're missing or corrupt the game just starts
 fresh. Delete them to reset your scores, or the speed ramp and window position.
 
+### The apps in native C++ (no Python needed)
+
+`MyTetris.cpp`, `MyPocketTanks.cpp` and `Sun2Set.cpp` are from-scratch
+**C++17 ports with identical functionality** to their Python twins — same
+mechanics (SRS / 7-bag / T-spins; 20 weapons / destructible terrain /
+trajectory-simulating AI; NOAA solar math / embedded WMM2025 / DST rules /
+hover-readout graph), same screens, same synthesized sounds, the same
+`--selftest`s **including every pinned reference value** (the WMM test
+vectors to ±0.01°, the WolframAlpha solar times, the table round-trips),
+and the same `%APPDATA%` JSON files, so the Python and native versions
+**share saved settings, high scores and config**. In the repo's
+stdlib-only spirit they use no third-party libraries: each is one file — a
+platform-free core plus a Win32 + GDI backend on Windows and a Cocoa
+backend on macOS (the same file compiles as Objective-C++ there).
+
+**Windows** (needs Visual Studio with the C++ workload — any edition):
+
+```powershell
+.\build_native.ps1                        # -> build\MyTetris.exe
+.\build_native.ps1 -App MyPocketTanks     # -> build\MyPocketTanks.exe
+.\build_native.ps1 -App Sun2Set           # -> build\Sun2Set.exe
+build\MyTetris.exe --selftest             # same headless checks as the .py
+```
+
+The exes are fully standalone (0.4–0.6 MB): static CRT, only core Windows
+DLLs, icon embedded — copy them to any Windows machine and run; no Python,
+no runtime installs.
+
+**macOS** (needs the Xcode Command Line Tools: `xcode-select --install`):
+
+```bash
+./build_native.command                    # -> build/MyTetris(.app)
+./build_native.command MyPocketTanks      # -> build/MyPocketTanks(.app)
+./build_native.command Sun2Set            # -> build/Sun2Set(.app)
+./build/MyTetris --selftest
+```
+
+The `.app`s are self-contained (native binary + icon, only system
+frameworks) — copy them to Applications or the Desktop and double-click.
+
 ## MyPocketTanks
 
 A turn-based **artillery duel** in the spirit of Pocket Tanks / Scorched Earth,
@@ -465,6 +505,11 @@ SmartScreen / Gatekeeper warnings and the (free) Python install if needed.
 | Script | Description |
 | --- | --- |
 | `MyTetris.py` | The game — accurate Tetris clone (SRS, 7-bag, DAS, ghost, hold, next-3, T-spins, back-to-back, start menu, difficulty, sound, high scores) plus a headless `--selftest`. |
+| `MyTetris.cpp` | The same game as native C++17 (no third-party libraries): platform-free core + Win32/GDI and Cocoa backends in one file, sharing the .py's saved files — plus the same `--selftest`. |
+| `MyPocketTanks.cpp` | The artillery duel as native C++17, same pattern: terrain pixel buffer, all 20 weapons, the driving AI, and the .py's config — plus the same `--selftest`. |
+| `Sun2Set.cpp` | The almanac as native C++17: NOAA solar math, embedded WMM2025, DST engine, text-entry form, hover-readout graph, native file dialogs, themes — plus the same `--selftest` with all its pinned reference values. |
+| `build_native.ps1` | **Windows** — compiles a native app (`-App MyTetris`/`MyPocketTanks`/`Sun2Set`) with Visual Studio's `cl` (found via vswhere) into a standalone `build\<App>.exe`, icon embedded. |
+| `build_native.command` | **macOS** — compiles a native app with `clang++` (Objective-C++) and wraps a self-contained `build/<App>.app` with the icon. |
 | `MyPocketTanks.py` | Artillery duel — weapon draft or one-weapon matches (settable 1–20 rounds), 20 weapons, destructible terrain, wind, optional fuel-limited movement (the AI drives too), AI or hotseat, sound — plus a headless `--selftest`. |
 | `Sun2Set.py` | Bonus non-game — sunrise/sunset almanac: a year of sunrise, sunset and day length for any location (NOAA equations), azimuths in true *and* magnetic bearings (embedded WMM2025), horizon-crossing durations, DST-aware or fixed-offset, graph with hover readout, assumptions-headed text file with Save/Load — plus a headless `--selftest`. |
 | `make_tetris_icon.py` | **Windows icon** — generates `mytetris.ico` by writing the ICO/BMP bytes directly (no Pillow). |

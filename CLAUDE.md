@@ -254,6 +254,75 @@ testable headlessly. Preserve it.
   so tests with `persist=False` never write real files. User data — never
   committed.
 
+## Native C++ ports (MyTetris.cpp, MyPocketTanks.cpp, Sun2Set.cpp)
+
+C++17 ports with **identical functionality** to their .py twins — no
+third-party libraries (the C++ analog of the stdlib-only rule: OS APIs
+only). If you change mechanics/math in one version, mirror it in the
+other; behavioral parity — including `--selftest` with every pinned
+reference value — is the point.
+
+- **Structure:** a platform-free core whose render emits draw *commands*
+  (a reified Tk canvas: rects, ovals, polygons, round-rects, text with
+  anchors) plus button hit boxes; the Win32/GDI and Cocoa backends just
+  rasterize the scene. MyPocketTanks' terrain is additionally a pixel
+  buffer the core repaints per column range (its Tk PhotoImage, reified)
+  and backends blit via a `Terrain` command. Everything — every screen —
+  stays headlessly testable with the same selftest assertions as the .py.
+- **Same files on disk:** they read/write the Python versions'
+  `%APPDATA%` JSON via a small built-in parser/writer (defensive like the
+  Python loaders). Interop verified both directions, including
+  MyPocketTanks' `win_pos` geometry-tail string.
+- **Build:** `build_native.ps1 [-App X]` / `build_native.command [X]` —
+  vswhere + `cl /MT` (static CRT → standalone exe, core Windows DLLs
+  only), icon embedded as resource id 1 which the window class loads;
+  mac: `clang++ -x objective-c++`, wrapped into a self-contained
+  `build/<App>.app` via sips/iconutil. Outputs in `build/` (git-ignored).
+- **Sun2Set specifics:** the whole Tk widget tree is reified as
+  immediate-mode scene widgets (entries with caret editing + Ctrl/Cmd+V
+  paste, radios, checkbox, dropdown popups, a wheel-scrolled table view);
+  the WMM2025 `.COF` block is spliced verbatim from Sun2Set.py's
+  `_WMM_COF` string into the `[[WMM_COF_DATA]]` raw literal by a small
+  script (re-splice if the model is ever refreshed); per-day system-zone
+  offsets come from `TzSpecificLocalTimeToSystemTime` at local noon
+  (Windows) / `mktime`+`tm_gmtoff` (macOS); file dialogs are
+  `GetOpen/SaveFileNameW` and `NSOpen/SavePanel`.
+- **Gotcha (cost a real bug):** `JParser` keeps pointers into the parsed
+  string — passing a temporary (`JParser p(ss.str())`) is
+  use-after-free UB that *worked* in one build and silently returned
+  empty configs in the next. Materialize the string first. When a C++
+  port behaves nondeterministically across rebuilds, suspect lifetime UB
+  before anything else.
+- **Gotcha (cost a real bug):** widget state that stores an *index*
+  (Sun2Set's month dropdown) must convert back to the domain value
+  (`month = index + 1`) everywhere it's read — the miss showed up as DST
+  months silently decrementing one step per app restart.
+- **Gotcha:** MSVC needs `/utf-8` (set in build_native.ps1) or non-ASCII
+  characters typed raw in string literals (em dashes, ellipses) become
+  mojibake in window/dialog titles; the `\xNN`-escaped UTF-8 in the
+  games' literals never depended on it.
+- **Gotcha:** GDI does no font fallback (Tk does): Consolas lacks ◀▶
+  U+25C0/25B6, so the C++ panels use the DOS-era pointers ◄► U+25C4/25BA
+  that Consolas (and Menlo) do carry — boxes in a screenshot mean a
+  missing glyph, not a rendering bug.
+- **Gotchas (Windows):** `windows.h` defines `far`/`near` and an `RGB`
+  macro — the core compiles before that include, but don't reuse those
+  names (`farthest`; `#undef RGB` sits after the include). Win32
+  `PlaySound` *can* do `SND_MEMORY|SND_ASYNC` (unlike winsound) because
+  the WAV buffers live for the program's lifetime. The GUI-subsystem
+  selftest prints fine when stdout is redirected (the CRT inherits the
+  pipe) and only calls `AttachConsole` when run bare; MyPocketTanks also
+  has a `--dumpconfig` diagnostic. MyTetris suppresses OS key
+  auto-repeat (Python tracks a held-set); MyPocketTanks deliberately
+  does NOT (Tk auto-repeat is what makes held angle/power keys work).
+- **Gotchas (macOS):** Cocoa modifiers (Shift/Ctrl) arrive via
+  `flagsChanged:`, not `keyDown:` (MyTetris needs that; MyPocketTanks
+  only reads the shift flag). The terrain pixel buffer needs the
+  double-flip CTM dance to draw upright in a flipped NSView.
+- **Test pattern:** drive GUI states by PostMessage'ing WM_KEYDOWN /
+  WM_LBUTTONDOWN and capture via `PrintWindow(hwnd, dc, 2)` — works even
+  with the display asleep (CopyFromScreen returns black then).
+
 ## Gotchas discovered here (don't re-learn these the hard way)
 
 - **`winsound.PlaySound(data, SND_MEMORY | SND_ASYNC)` raises** "Cannot play
@@ -333,6 +402,11 @@ given on the command line.
 | Script | Purpose |
 | --- | --- |
 | `MyTetris.py` | The game (and its `--selftest`). |
+| `MyTetris.cpp` | The native C++ port of MyTetris (see *Native C++ ports*); same `--selftest`. |
+| `MyPocketTanks.cpp` | The native C++ port of MyPocketTanks; same `--selftest` plus a `--dumpconfig` diagnostic. |
+| `Sun2Set.cpp` | The native C++ port of Sun2Set (WMM block spliced from the .py — see *Native C++ ports*); same `--selftest`. |
+| `build_native.ps1` | **Windows** — builds `build\<App>.exe` for any of the native ports (MSVC via vswhere, static CRT, embedded icon). |
+| `build_native.command` | **macOS** — builds `build/<App>` + self-contained `build/<App>.app` (clang++ as Objective-C++). |
 | `MyPocketTanks.py` | The artillery duel (and its `--selftest`). |
 | `Sun2Set.py` | The sunrise/sunset almanac (and its `--selftest`). |
 | `make_tetris_icon.py` | Generates `mytetris.ico` (tidy falling-T scene) by writing the ICO/BMP bytes directly (no Pillow). |
