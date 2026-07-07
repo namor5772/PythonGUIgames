@@ -426,6 +426,40 @@ and creates **`Sun2Set.app`** on your Desktop.
 > if you move the project folder. macOS sometimes caches the old Finder/Dock icon;
 > if the new one doesn't appear immediately, it refreshes on next login.
 
+## Sharing the apps with friends
+
+Each app packs into a single zip that anyone on Windows or macOS can
+install without knowing anything about Python:
+
+```powershell
+.venv\Scripts\python.exe package_games.py            # all three zips
+.venv\Scripts\python.exe package_games.py MyTetris   # or just one
+```
+
+This writes `dist\MyPocketTanks.zip`, `dist\MyTetris.zip` and
+`dist\Sun2Set.zip` (~60–76 KB each). Every zip contains the app, its icons,
+the license, a per-app plain-text `README.txt` install-and-play guide, and
+two one-click installers (one templated source pair in `packaging/`,
+customized per app at zip time):
+
+- **`INSTALL-Windows.bat`** — finds an installed Python 3 (opening the
+  python.org download page with instructions if there isn't one), checks
+  Tkinter, then creates a Desktop shortcut that runs the app with
+  `pythonw.exe` so no console window appears.
+- **`Install-macOS.command`** — same idea: finds a `python3` that has
+  Tkinter, builds the `.icns` with the system `sips`/`iconutil`, and
+  assembles a double-clickable `.app` on the Desktop. It ships LF-only with
+  its executable bit stored in the zip, so it survives extraction on macOS.
+
+Your friend just extracts the zip somewhere permanent and double-clicks the
+installer for their OS — `README.txt` inside walks them through the
+SmartScreen / Gatekeeper warnings and the (free) Python install if needed.
+
+> **Don't email the zips as attachments** — Gmail (and most mail providers)
+> block archives containing `.bat` files, even nested or renamed. Share a
+> link instead: upload to Google Drive / OneDrive and set access to
+> *Anyone with the link*, or attach the zip to a GitHub release.
+
 ## Scripts
 
 | Script | Description |
@@ -442,6 +476,7 @@ and creates **`Sun2Set.app`** on your Desktop.
 | `make_sun2set_icon_mac.py` | **macOS icon** — generates `sun2set.png` (the sunset scene at 1024 px), reusing `make_tetris_icon_mac.py`'s rasterizer + PNG writer. No Pillow. |
 | `create_shortcut.ps1` | **Windows** — creates a Desktop `.lnk` for any app (parameterized: `-Script`, `-Icon`, `-Name`). |
 | `create_shortcut.command` | **macOS** — builds an `.icns` and a clickable `.app` on the Desktop (optional args: name, target script, icon PNG; defaults to MyTetris). |
+| `package_games.py` | Builds `dist/<Name>.zip` friend-shareable bundles (all three apps, or the ones named on the command line): app + icons + license + per-app install guide + the one-click Windows/macOS installers templated from `packaging/`. |
 
 ## License
 

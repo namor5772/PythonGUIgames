@@ -280,6 +280,40 @@ testable headlessly. Preserve it.
   failure was invisible for three commits because the error was swallowed. When
   something "silently doesn't work," temporarily surface the exception first.
 
+## Friend packages
+
+`package_games.py` zips each app + icons + license + its
+`packaging/README-<Name>.txt` guide + the two installers into
+`dist/<Name>.zip` (git-ignored) — all three apps by default, or the names
+given on the command line.
+
+- **One installer source pair serves all apps.** `INSTALL-Windows.bat` /
+  `Install-macOS.command` are written (and E2E-verified) for MyPocketTanks;
+  the other apps' copies are derived at zip time by token substitution:
+  `MyPocketTanks` → name (also rewrites `<Name>.py` — every app is
+  `<Name>.py`), `mypockettanks` → icon base, and the shortcut-description
+  tagline (`GAMES` dict). A leftover-token check fails the build if
+  app-specific wording bypasses the tokens — route new game-specific text
+  through them (or `$NAME` in the .command).
+- The installers target the **system** Python (`py -3`/`python` on Windows,
+  a tkinter-capable `python3` on macOS) — a friend's machine has no venv.
+  Both guide a python.org install when nothing suitable is found, and both
+  refuse to run from inside an unextracted zip.
+- Platform details are enforced **at zip time**, not trusted from the
+  working tree: the `.command` is normalized to LF (a CR after
+  `#!/bin/bash` breaks it) and stored with the exec bit via a unix `ZipInfo`
+  (`create_system=3`) so macOS restores `chmod +x`; the `.bat` is CRLF
+  (cmd.exe mis-parses labels in LF-only batch files); friend-facing text
+  must stay plain ASCII (enforced — cmd's OEM codepage garbles the rest).
+  `.gitattributes` pins the same endings for checkouts.
+- To test the Windows path end-to-end: extract a zip to a temp dir and run
+  `INSTALL-Windows.bat /nolaunch` — but **back up the real Desktop
+  `<Name>.lnk` first**; the installer overwrites it (that's its job).
+  Selftest/launch the extracted copy with the *system* Python, not the venv.
+- **Don't email the zips:** Gmail blocks archives containing `.bat` (scans
+  inside, nesting/renaming doesn't evade it). Share a Drive/OneDrive link
+  set to "Anyone with the link", or a GitHub release.
+
 ## Conventions
 
 - Match the existing style: stdlib only, `Consolas` font, the `COLORS` palette,
@@ -310,3 +344,4 @@ testable headlessly. Preserve it.
 | `make_sun2set_icon_mac.py` | Generates `sun2set.png` (macOS, 1024px) — the same sunset scene as the ICO, rendered natively; reuses `make_tetris_icon_mac`'s rasterizer/PNG writer. |
 | `create_shortcut.ps1` | **Windows** Desktop `.lnk`; parameterized `-Script` / `-Icon` / `-Name`, defaults to MyTetris. |
 | `create_shortcut.command` | **macOS**: `sips`+`iconutil` build the `.icns`, then assemble a clickable `.app` on the Desktop. Args: name, script, icon PNG (defaults = MyTetris). Bakes in the found `python3` (Finder gives apps a minimal PATH) and absolute project paths. |
+| `package_games.py` | Builds `dist/<Name>.zip` friend-shareable bundles for all three apps (see *Friend packages* above); templated installer sources live in `packaging/`. |
