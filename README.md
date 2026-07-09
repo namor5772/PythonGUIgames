@@ -475,6 +475,21 @@ and creates **`Sun2Set.app`** on your Desktop.
 ./create_shortcut.command "My App" MyApp.py myapp.png
 ```
 
+**Native `.app` shortcut (no Python needed):** once you've compiled the standalone
+binaries (see the *native C++* section above), add `--native` to point the shortcut
+at `build/<App>` directly — the launcher runs the native binary, no interpreter:
+
+```bash
+./build_native.command MyPocketTanks            # build it first -> build/MyPocketTanks
+./create_shortcut.command --native MyPocketTanks
+```
+
+These are auto-named **"<App> (Native)"** (e.g. `MyPocketTanks (Native).app`) so they
+sit beside the Python shortcuts instead of overwriting them. The `--native` flavor
+takes just the app name (`MyTetris` / `MyPocketTanks` / `Sun2Set`) — it finds the
+`build/<App>` binary and the matching `<app>.png` icon on its own. The launcher bakes
+in an absolute path, so re-run it if you move the `build/` folder.
+
 > Both shortcut builders bake in **absolute paths**, so re-run the relevant script
 > if you move the project folder. macOS sometimes caches the old Finder/Dock icon;
 > if the new one doesn't appear immediately, it refreshes on next login.
@@ -533,7 +548,7 @@ SmartScreen / Gatekeeper warnings and the (free) Python install if needed.
 | `make_pockettanks_icon_mac.py` | **macOS icon** — generates `mypockettanks.png` (the artillery duel at 1024 px), reusing `make_tetris_icon_mac.py`'s rasterizer + PNG writer. No Pillow. |
 | `make_sun2set_icon_mac.py` | **macOS icon** — generates `sun2set.png` (the sunset scene at 1024 px), reusing `make_tetris_icon_mac.py`'s rasterizer + PNG writer. No Pillow. |
 | `create_shortcut.ps1` | **Windows** — creates a Desktop `.lnk` for any app (parameterized: `-Script`, `-Icon`, `-Name`); add `-Native` to launch the compiled `build\<App>.exe` instead of Python (embedded icon, auto-named "<App> (Native)"). |
-| `create_shortcut.command` | **macOS** — builds an `.icns` and a clickable `.app` on the Desktop (optional args: name, target script, icon PNG; defaults to MyTetris). |
+| `create_shortcut.command` | **macOS** — builds an `.icns` and a clickable `.app` on the Desktop (optional args: name, target script, icon PNG; defaults to MyTetris); add `--native <App>` to launch the compiled `build/<App>` binary instead of Python (no interpreter, auto-named "<App> (Native)"). |
 | `package_games.py` | Builds `dist/<Name>.zip` friend-shareable bundles (all three apps, or the ones named on the command line): app + icons + license + per-app install guide + the one-click Windows/macOS installers templated from `packaging/`. |
 
 ## License

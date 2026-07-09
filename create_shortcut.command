@@ -1,23 +1,42 @@
 #!/bin/bash
-# Builds a clickable Desktop shortcut for this project's games on macOS.
+# Builds a clickable Desktop shortcut for this project's games on macOS, in one
+# of two flavors — the macOS counterpart of create_shortcut.ps1:
 #
-# It turns a master PNG (see make_*_icon_mac.py) into a proper .icns and
-# assembles a double-clickable <Name>.app bundle on the Desktop whose launcher
-# runs the project's script with python3 — the macOS counterpart of
-# create_shortcut.ps1.
+#   * Python (default) — a <Name>.app whose launcher runs the .py with python3.
+#   * Native (--native) — a "<App> (Native).app" whose launcher runs the
+#                         compiled build/<App> binary directly (no Python, no
+#                         venv, fully self-contained). Build it first with
+#                         build_native.command.
 #
-#   ./create_shortcut.command                 # default "MyTetris" / MyTetris.py
+# Either way it turns a master PNG (see make_*_icon_mac.py) into a proper .icns
+# and assembles a double-clickable .app bundle on the Desktop.
+#
+# Python flavor:  ./create_shortcut.command [Name [Script.py [icon.png]]]
+#   ./create_shortcut.command                             # MyTetris / MyTetris.py
 #   ./create_shortcut.command MyPocketTanks MyPocketTanks.py mypockettanks.png
 #   ./create_shortcut.command "My App" App.py myapp.png
+#
+# Native flavor:  ./create_shortcut.command --native [App [DisplayName]]
+#   ./create_shortcut.command --native MyTetris           # -> "MyTetris (Native).app"
+#   ./create_shortcut.command --native Sun2Set
+#   App is one of MyTetris / MyPocketTanks / Sun2Set; the binary is build/<App>,
+#   the icon <lowercase App>.png, and — like create_shortcut.ps1 -Native — the
+#   shortcut is named "<App> (Native)" so it sits beside the Python one instead
+#   of overwriting it (pass DisplayName to override).
 #
 # Pure system tools only (bash, sips, iconutil) — no third-party packages.
 
 set -euo pipefail
 
-NAME="${1:-MyTetris}"
-SCRIPT="${2:-MyTetris.py}"
-PNG="${3:-mytetris.png}"
-BASE="${PNG%.png}"          # mytetris.png -> mytetris(.icns)
+# ---- Parse a leading --native flag; everything else stays positional. ------
+NATIVE=0
+POS=()
+for arg in "$@"; do
+    case "$arg" in
+        --native|-Native|-n) NATIVE=1 ;;
+        *) POS+=("$arg") ;;
+    esac
+done
 
 # Resolve the project directory (where this script lives), even via symlink.
 SOURCE="${BASH_SOURCE[0]}"
@@ -27,20 +46,46 @@ while [ -h "$SOURCE" ]; do
     [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 PROJECT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
-
-# Bake in the python3 we can actually find now (Finder gives apps a minimal
-# PATH, so we record the full path rather than relying on PATH at launch).
-PYTHON="$(command -v python3 || true)"
-[ -z "$PYTHON" ] && PYTHON="/usr/bin/python3"
-
 cd "$PROJECT_DIR"
+
+if [ "$NATIVE" -eq 1 ]; then
+    # ---- Native flavor: point at the standalone build/<App> binary. --------
+    APP="${POS[0]:-MyTetris}"
+    case "$APP" in
+        MyTetris|MyPocketTanks|Sun2Set) ;;
+        *) echo "unknown app: $APP (choose MyTetris, MyPocketTanks or Sun2Set)"
+           exit 1 ;;
+    esac
+    NAME="${POS[1]:-$APP (Native)}"
+    PNG="$(echo "$APP" | tr '[:upper:]' '[:lower:]').png"
+    BIN="$PROJECT_DIR/build/$APP"
+    if [ ! -x "$BIN" ]; then
+        echo "Native build not found: $BIN"
+        echo "    build it first:  ./build_native.command $APP"
+        exit 1
+    fi
+else
+    # ---- Python flavor: launch the .py with python3 (unchanged). -----------
+    NAME="${POS[0]:-MyTetris}"
+    SCRIPT="${POS[1]:-MyTetris.py}"
+    PNG="${POS[2]:-mytetris.png}"
+
+    # Bake in the python3 we can actually find now (Finder gives apps a minimal
+    # PATH, so we record the full path rather than relying on PATH at launch).
+    PYTHON="$(command -v python3 || true)"
+    [ -z "$PYTHON" ] && PYTHON="/usr/bin/python3"
+fi
+
+BASE="${PNG%.png}"          # mytetris.png -> mytetris(.icns)
 
 # 1) Make sure the master PNG exists (running its generator if we know it),
 #    then build a multi-resolution .icns.
 if [ ! -f "$PNG" ]; then
+    PYGEN="${PYTHON:-$(command -v python3 || echo /usr/bin/python3)}"
     case "$PNG" in
-        mytetris.png)      "$PYTHON" make_tetris_icon_mac.py ;;
-        mypockettanks.png) "$PYTHON" make_pockettanks_icon_mac.py ;;
+        mytetris.png)      "$PYGEN" make_tetris_icon_mac.py ;;
+        mypockettanks.png) "$PYGEN" make_pockettanks_icon_mac.py ;;
+        sun2set.png)       "$PYGEN" make_sun2set_icon_mac.py ;;
         *) echo "Icon $PNG not found (and no known generator for it)"; exit 1 ;;
     esac
 fi
@@ -62,12 +107,12 @@ rm -rf "$(dirname "$ICONSET")"
 echo "Built $BASE.icns"
 
 # 2) Assemble the .app bundle on the Desktop.
-APP="$HOME/Desktop/$NAME.app"
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BASE.icns" "$APP/Contents/Resources/$BASE.icns"
+APP_BUNDLE="$HOME/Desktop/$NAME.app"
+rm -rf "$APP_BUNDLE"
+mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
+cp "$BASE.icns" "$APP_BUNDLE/Contents/Resources/$BASE.icns"
 
-cat > "$APP/Contents/Info.plist" <<PLIST
+cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -86,8 +131,18 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# The launcher: a tiny shell stub that runs the game with the baked python3.
-cat > "$APP/Contents/MacOS/$NAME" <<LAUNCH
+# The launcher: a tiny shell stub that starts the game.
+if [ "$NATIVE" -eq 1 ]; then
+    # Run the standalone native binary directly — no interpreter needed.
+    cat > "$APP_BUNDLE/Contents/MacOS/$NAME" <<LAUNCH
+#!/bin/bash
+BIN="$BIN"
+cd "$PROJECT_DIR"
+exec "\$BIN" "\$@"
+LAUNCH
+else
+    # Run the game with the baked python3.
+    cat > "$APP_BUNDLE/Contents/MacOS/$NAME" <<LAUNCH
 #!/bin/bash
 PYTHON="$PYTHON"
 SCRIPT="$PROJECT_DIR/$SCRIPT"
@@ -95,12 +150,17 @@ SCRIPT="$PROJECT_DIR/$SCRIPT"
 cd "$PROJECT_DIR"
 exec "\$PYTHON" "\$SCRIPT" "\$@"
 LAUNCH
-chmod +x "$APP/Contents/MacOS/$NAME"
+fi
+chmod +x "$APP_BUNDLE/Contents/MacOS/$NAME"
 
 # Nudge LaunchServices/Finder to pick up the new bundle + icon right away.
-touch "$APP"
+touch "$APP_BUNDLE"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
-    -f "$APP" >/dev/null 2>&1 || true
+    -f "$APP_BUNDLE" >/dev/null 2>&1 || true
 
-echo "Created shortcut: $APP"
-echo "Launches: $PYTHON $PROJECT_DIR/$SCRIPT"
+echo "Created shortcut: $APP_BUNDLE"
+if [ "$NATIVE" -eq 1 ]; then
+    echo "Launches: $BIN"
+else
+    echo "Launches: $PYTHON $PROJECT_DIR/$SCRIPT"
+fi
