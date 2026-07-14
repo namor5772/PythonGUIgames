@@ -1644,6 +1644,8 @@ public:
     std::string statusText;
     int statusKind = 0;                         // 0 sub, 1 ok, 2 err
     int tableScroll = 0, tableHScroll = 0;
+    int scrollDrag = 0;                         // 0 none, 1 v-thumb, 2 h-thumb
+    double scrollDragOff = 0;                   // grab offset into the thumb
     double mouseX = -1, mouseY = -1;
     long frame = 0;
     std::function<double(int, bool)> charW =    // monospace advance (px)
@@ -2190,6 +2192,33 @@ public:
             openMenu = -1;
             return;
         }
+        // The table's hand-drawn scrollbars: grab the thumb to drag, click
+        // the trough to page. Early-out keeps entry focus where it was
+        // (a real tk.Scrollbar doesn't steal focus either).
+        if (currentTab == "table") {
+            Bar v = tableVBar();
+            if (v.shown && x >= GRAPH_X + GRAPH_W - 12
+                && x <= GRAPH_X + GRAPH_W && y >= v.lo && y <= v.hi) {
+                if (y < v.t0)
+                    tableScroll = std::max(0, tableScroll - (int)v.view);
+                else if (y > v.t1)
+                    tableScroll = std::min((int)v.maxScroll,
+                                           tableScroll + (int)v.view);
+                else { scrollDrag = 1; scrollDragOff = y - v.t0; }
+                return;
+            }
+            Bar h = tableHBar();
+            if (h.shown && y >= GRAPH_Y + GRAPH_H - 12
+                && y <= GRAPH_Y + GRAPH_H && x >= h.lo && x <= h.hi) {
+                if (x < h.t0)
+                    tableHScroll = std::max(0, tableHScroll - (int)h.view);
+                else if (x > h.t1)
+                    tableHScroll = std::min((int)h.maxScroll,
+                                            tableHScroll + (int)h.view);
+                else { scrollDrag = 2; scrollDragOff = x - h.t0; }
+                return;
+            }
+        }
         // Entry focus + caret placement first (they're also in buttons).
         for (auto& kv : entries) {
             EntryState& e = kv.second;
@@ -2214,7 +2243,17 @@ public:
     void onMouseMove(double x, double y) {
         mouseX = x;
         mouseY = y;
+        if (scrollDrag) {                       // thumb follows the pointer
+            Bar b = scrollDrag == 1 ? tableVBar() : tableHBar();
+            double run = (b.hi - b.lo) - (b.t1 - b.t0);  // t0's travel range
+            double pos = (scrollDrag == 1 ? y : x) - scrollDragOff - b.lo;
+            int s = run > 0 ? (int)std::lround(pos / run * b.maxScroll) : 0;
+            s = std::max(0, std::min(s, (int)b.maxScroll));  // draw's clamp
+            (scrollDrag == 1 ? tableScroll : tableHScroll) = s;
+        }
     }
+
+    void onMouseUp() { scrollDrag = 0; }
 
     void onWheel(double delta, bool horizontal) {
         if (currentTab != "table") return;
@@ -2797,43 +2836,91 @@ public:
     // ------------------------------------------------------------- the table
     std::vector<std::string> tableLines;
     size_t tableLinesFor = (size_t)-1;
+    size_t tableMaxCols = 0;                    // widest row, in codepoints
+    static constexpr double TABLE_LINE_H = 16;
+
+    void ensureTableLines() {
+        if (tableLinesFor == table_text.size()) return;
+        tableLines.clear();
+        tableMaxCols = 0;
+        std::istringstream in(table_text);
+        std::string line;
+        while (std::getline(in, line)) {
+            while (!line.empty() && line.back() == '\r') line.pop_back();
+            size_t cps = 0;                     // codepoints, not bytes
+            for (size_t j = 0; j < line.size(); j = utf8Next(line, j)) cps++;
+            tableMaxCols = std::max(tableMaxCols, cps);
+            tableLines.push_back(std::move(line));
+        }
+        tableLinesFor = table_text.size();
+    }
+
+    // The table's scrollbars are drawn by hand (the .py's tk.Scrollbars,
+    // reified), so clicks are hit-tested by hand too: drawTable() and the
+    // mouse handlers both read this one geometry — otherwise the thumb
+    // drifts away from where it can be grabbed.
+    struct Bar {
+        bool shown = false;                     // content overflows the view
+        double lo = 0, hi = 0;                  // track run (v: y, h: x)
+        double t0 = 0, t1 = 0;                  // thumb run within the track
+        double view = 0, maxScroll = 0;         // in scroll units
+    };
+    static Bar barGeom(double lo, double hi, double content, double view,
+                       double scroll) {
+        Bar b;
+        b.lo = lo; b.hi = hi; b.view = view;
+        b.maxScroll = std::max(0.0, content - view);
+        b.shown = content > view && hi > lo;
+        if (!b.shown) { b.t0 = lo; b.t1 = hi; return b; }
+        double track = hi - lo;                 // thumb no smaller than 20 px
+        double len = std::min(track, std::max(20.0, track * view / content));
+        double frac = std::max(0.0, std::min(scroll, b.maxScroll))
+                      / b.maxScroll;
+        b.t0 = lo + frac * (track - len);
+        b.t1 = b.t0 + len;
+        return b;
+    }
+    Bar tableVBar() {                           // scroll unit: lines
+        ensureTableLines();
+        int visible = (int)(GRAPH_H / TABLE_LINE_H) - 1;
+        return barGeom(GRAPH_Y + 2, GRAPH_Y + GRAPH_H - 2,
+                       (double)tableLines.size(), visible, tableScroll);
+    }
+    Bar tableHBar() {                           // scroll unit: pixels
+        ensureTableLines();
+        return barGeom(GRAPH_X + 2, GRAPH_X + GRAPH_W - 12,
+                       16 + tableMaxCols * charW(10, false),
+                       GRAPH_W - 12, tableHScroll);
+    }
 
     void drawTable() {
         emitRect(GRAPH_X - 1, GRAPH_Y - 1, GRAPH_X + GRAPH_W + 1,
                  GRAPH_Y + GRAPH_H + 1, true, T.panel, true, T.edge, 1);
-        if (tableLinesFor != table_text.size()) {
-            tableLines.clear();
-            std::istringstream in(table_text);
-            std::string line;
-            while (std::getline(in, line)) {
-                while (!line.empty() && line.back() == '\r') line.pop_back();
-                tableLines.push_back(line);
-            }
-            tableLinesFor = table_text.size();
-        }
-        const double lineH = 16;
-        int visible = (int)(GRAPH_H / lineH) - 1;
-        int maxScroll = std::max(0, (int)tableLines.size() - visible);
-        tableScroll = std::max(0, std::min(tableScroll, maxScroll));
+        Bar v = tableVBar(), h = tableHBar();
+        tableScroll = std::max(0, std::min(tableScroll, (int)v.maxScroll));
+        tableHScroll = std::max(0, std::min(tableHScroll, (int)h.maxScroll));
+        v = tableVBar(); h = tableHBar();       // thumbs from clamped values
+        int visible = (int)(GRAPH_H / TABLE_LINE_H) - 1;
         emitClip(GRAPH_X, GRAPH_Y, GRAPH_X + GRAPH_W - 12, GRAPH_Y + GRAPH_H);
         for (int i = 0; i < visible; i++) {
             int idx = tableScroll + i;
             if (idx >= (int)tableLines.size()) break;
-            emitText(GRAPH_X + 8 - tableHScroll, GRAPH_Y + 6 + i * lineH,
+            emitText(GRAPH_X + 8 - tableHScroll,
+                     GRAPH_Y + 6 + i * TABLE_LINE_H,
                      tableLines[idx], T.text, 10, false, Cmd::NW);
         }
         emitUnclip();
-        if ((int)tableLines.size() > visible) {   // scrollbar thumb
-            double track0 = GRAPH_Y + 2, track1 = GRAPH_Y + GRAPH_H - 2;
-            double frac0 = (double)tableScroll / tableLines.size();
-            double frac1 = (double)(tableScroll + visible) / tableLines.size();
-            emitRect(GRAPH_X + GRAPH_W - 10, track0, GRAPH_X + GRAPH_W - 2,
-                     track1, true, T.btn);
-            emitRect(GRAPH_X + GRAPH_W - 10,
-                     track0 + frac0 * (track1 - track0),
-                     GRAPH_X + GRAPH_W - 2,
-                     track0 + std::min(1.0, frac1) * (track1 - track0), true,
-                     T.btn_edge);
+        if (v.shown) {                          // vertical track + thumb
+            emitRect(GRAPH_X + GRAPH_W - 10, v.lo, GRAPH_X + GRAPH_W - 2,
+                     v.hi, true, T.btn);
+            emitRect(GRAPH_X + GRAPH_W - 10, v.t0, GRAPH_X + GRAPH_W - 2,
+                     v.t1, true, T.btn_edge);
+        }
+        if (h.shown) {                          // horizontal track + thumb
+            emitRect(h.lo, GRAPH_Y + GRAPH_H - 10, h.hi,
+                     GRAPH_Y + GRAPH_H - 2, true, T.btn);
+            emitRect(h.t0, GRAPH_Y + GRAPH_H - 10, h.t1,
+                     GRAPH_Y + GRAPH_H - 2, true, T.btn_edge);
         }
     }
 
@@ -3403,6 +3490,50 @@ static int runSelftest() {
                "itself)\n");
     }
 
+    // 13. The table tab's hand-drawn scrollbars: hit boxes track the drawn
+    //     thumb (grab + drag + release, trough paging, clamping).
+    {
+        Sun2SetApp app(true, false);
+        app.start = Date{ 2026, 1, 1 };
+        app.days = 365;
+        app.compute();
+        app.currentTab = "table";
+        app.draw();
+        Sun2SetApp::Bar v = app.tableVBar();
+        CHECK(v.shown && app.tableScroll == 0, "v-bar shown, at top");
+        double bx = GRAPH_X + GRAPH_W - 6;      // mid scrollbar strip
+        app.onClick(bx, v.t1 + 1);              // trough below the thumb
+        CHECK(app.tableScroll == (int)v.view, "trough click pages down");
+        CHECK(app.scrollDrag == 0, "trough click is not a drag");
+        int page = app.tableScroll;
+        v = app.tableVBar();
+        app.onClick(bx, (v.t0 + v.t1) / 2);     // grab the thumb...
+        CHECK(app.scrollDrag == 1 && app.tableScroll == page,
+              "thumb grab starts a drag without jumping");
+        app.onMouseMove(bx, v.hi);              // ...drag to the bottom
+        CHECK(app.tableScroll == (int)v.maxScroll, "drag reaches the end");
+        app.onMouseMove(bx, v.lo - 500);        // way past the top
+        CHECK(app.tableScroll == 0, "drag clamps at the top");
+        app.onMouseUp();
+        CHECK(app.scrollDrag == 0, "release ends the drag");
+        app.onMouseMove(bx, v.hi);
+        CHECK(app.tableScroll == 0, "no drag after release");
+        app.draw();
+        Sun2SetApp::Bar h = app.tableHBar();    // shown iff rows overflow
+        if (h.shown) {
+            app.onClick(h.lo + 2, GRAPH_Y + GRAPH_H - 6);
+            CHECK(app.scrollDrag == 2 && app.tableHScroll == 0,
+                  "h-thumb grab");
+            app.onMouseMove(GRAPH_X + GRAPH_W, GRAPH_Y + GRAPH_H - 6);
+            CHECK(app.tableHScroll == (int)h.maxScroll, "h-drag to the end");
+            app.onMouseUp();
+            app.tableHScroll += 100000;         // wheel past the end...
+            app.draw();                         // ...and the draw re-clamps
+            CHECK(app.tableHScroll == (int)h.maxScroll, "h-scroll clamped");
+        }
+        printf("  table scrollbars OK (thumb drag + trough paging)\n");
+    }
+
     if (gSelftestFailures == 0)
         printf("All Sun2Set self-tests passed.\n");
     else
@@ -3809,7 +3940,12 @@ static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_LBUTTONDOWN:
         SetFocus(hwnd);
+        SetCapture(hwnd);       // scrollbar drags keep tracking outside
         if (core) core->onClick((short)LOWORD(lp), (short)HIWORD(lp));
+        return 0;
+    case WM_LBUTTONUP:
+        ReleaseCapture();
+        if (core) core->onMouseUp();
         return 0;
     case WM_CLOSE: {
         if (core) {
@@ -4147,6 +4283,16 @@ static NSFont* sceneFont(int size, bool bold) {
     if (!core) return;
     NSPoint p = [self convertPoint:[e locationInWindow] fromView:nil];
     core->onMouseMove(p.x, p.y);
+}
+
+- (void)mouseDragged:(NSEvent*)e {   // scrollbar thumb drags
+    if (!core) return;
+    NSPoint p = [self convertPoint:[e locationInWindow] fromView:nil];
+    core->onMouseMove(p.x, p.y);
+}
+
+- (void)mouseUp:(NSEvent*)e {
+    if (core) core->onMouseUp();
 }
 
 - (void)scrollWheel:(NSEvent*)e {

@@ -280,7 +280,12 @@ reference value — is the point.
   `build/<App>.app` via sips/iconutil. Outputs in `build/` (git-ignored).
 - **Sun2Set specifics:** the whole Tk widget tree is reified as
   immediate-mode scene widgets (entries with caret editing + Ctrl/Cmd+V
-  paste, radios, checkbox, dropdown popups, a wheel-scrolled table view);
+  paste, radios, checkbox, dropdown popups, a table view with wheel
+  scrolling *and* draggable v/h scrollbars — `tableVBar`/`tableHBar`
+  compute one shared `Bar` geometry that `drawTable` draws and the mouse
+  handlers hit-test, thumb drags ride `SetCapture`+`WM_LBUTTONUP` /
+  `mouseDragged:`+`mouseUp:`, and the selftest asserts grab/drag/trough
+  paging against that geometry);
   the WMM2025 `.COF` block is spliced verbatim from Sun2Set.py's
   `_WMM_COF` string into the `[[WMM_COF_DATA]]` raw literal by a small
   script (re-splice if the model is ever refreshed); per-day system-zone
@@ -321,7 +326,12 @@ reference value — is the point.
   double-flip CTM dance to draw upright in a flipped NSView.
 - **Test pattern:** drive GUI states by PostMessage'ing WM_KEYDOWN /
   WM_LBUTTONDOWN and capture via `PrintWindow(hwnd, dc, 2)` — works even
-  with the display asleep (CopyFromScreen returns black then).
+  with the display asleep (CopyFromScreen returns black then). The exes
+  are DPI-unaware, so on a scaled display Windows *translates* posted
+  mouse lParams physical→logical at the GetMessage boundary: post
+  client-logical coords **multiplied by the scale** (`GetClientRect`
+  width from a DPI-aware test process ÷ the app's logical client width),
+  or every synthetic click lands up-left of where you aimed.
 
 ## Gotchas discovered here (don't re-learn these the hard way)
 
